@@ -141,7 +141,15 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
         botState: BotState.AWAITING_LANGUAGE,
       });
       console.log("New user created:", user._id);
-      await sendWelcomeAndLanguageSelection(farmerPhoneNumber);
+      await sendListMenu(
+        farmerPhoneNumber,
+        [
+          { id: "lang_en", title: "English" },
+          { id: "lang_hi", title: "हिन्दी" },
+          { id: "lang_mr", title: "मराठी" }
+        ],
+        "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
+      );
       res.sendStatus(200);
       return;
     }
@@ -166,12 +174,28 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
           await user.save();
           await sendTextMessage(farmerPhoneNumber, locationRequestMessage[selectedLang]);
         } else {
-          await sendWelcomeAndLanguageSelection(farmerPhoneNumber);
+          await sendListMenu(
+            farmerPhoneNumber,
+            [
+              { id: "lang_en", title: "English" },
+              { id: "lang_hi", title: "हिन्दी" },
+              { id: "lang_mr", title: "मराठी" }
+            ],
+            "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
+          );
         }
       } else {
         // They sent something other than a language button — re-prompt
         await sendTextMessage(farmerPhoneNumber, "loduuuuuu, sangitlaye te kar na");
-        await sendWelcomeAndLanguageSelection(farmerPhoneNumber);
+        await sendListMenu(
+          farmerPhoneNumber,
+          [
+            { id: "lang_en", title: "English" },
+            { id: "lang_hi", title: "हिन्दी" },
+            { id: "lang_mr", title: "मराठी" }
+          ],
+          "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
+        );
       }
       res.sendStatus(200);
       return;
@@ -201,7 +225,15 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
         if (buttonId === "update_language") {
           user.botState = BotState.AWAITING_NEW_LANGUAGE;
           await user.save();
-          await sendWelcomeAndLanguageSelection(farmerPhoneNumber);
+          await sendListMenu(
+            farmerPhoneNumber,
+            [
+              { id: "lang_en", title: "English" },
+              { id: "lang_hi", title: "हिन्दी" },
+              { id: "lang_mr", title: "मराठी" }
+            ],
+            "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
+          );
         } else if (buttonId === "update_location") {
           user.botState = BotState.AWAITING_NEW_LOCATION;
           await user.save();
@@ -233,10 +265,26 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
           await sendTextMessage(farmerPhoneNumber, languageUpdatedMessage[selectedLang]);
           await sendListMenu(farmerPhoneNumber, mainMenu[selectedLang].options, mainMenu[selectedLang].body);
         } else {
-          await sendWelcomeAndLanguageSelection(farmerPhoneNumber);
+          await sendListMenu(
+            farmerPhoneNumber,
+            [
+              { id: "lang_en", title: "English" },
+              { id: "lang_hi", title: "हिन्दी" },
+              { id: "lang_mr", title: "मराठी" }
+            ],
+            "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
+          );
         }
       } else {
-        await sendWelcomeAndLanguageSelection(farmerPhoneNumber);
+        await sendListMenu(
+          farmerPhoneNumber,
+          [
+            { id: "lang_en", title: "English" },
+            { id: "lang_hi", title: "हिन्दी" },
+            { id: "lang_mr", title: "मराठी" }
+          ],
+          "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
+        );
       }
       res.sendStatus(200);
       return;
@@ -281,18 +329,6 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
   }
 });
 
-async function sendWelcomeAndLanguageSelection(recipientNumber: string) {
-  await sendListMenu(
-    recipientNumber,
-    [
-      { id: "lang_en", title: "English" },
-      { id: "lang_hi", title: "हिन्दी" },
-      { id: "lang_mr", title: "मराठी" }
-    ],
-    "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
-  );
-}
-
 app.get('/', (req: Request, res: Response) => {
   console.log('Received GET request at /api/hello');
   const response: ApiResponse = {
@@ -303,65 +339,6 @@ app.get('/', (req: Request, res: Response) => {
   };
   res.json(response);
 });
-
-app.post("/api/translate-audio", async (req: Request, res: Response) => {
-  try {
-    const { phoneNumber, text, language } = req.body;
-
-    if (!phoneNumber || !text) {
-      res.status(400).json({ error: "phoneNumber and text are required" });
-      return;
-    }
-
-    // Determine target language: from body, from user profile, or default to English
-    let targetLang: SupportedLanguages = language as SupportedLanguages;
-    if (!targetLang) {
-      const user = await UserModel.findOne({ phoneNumber });
-      targetLang = user?.language ?? SupportedLanguages.ENGLISH;
-    }
-
-    const { translatedText, audioBuffer } = await translateAndSpeak(text, targetLang);
-
-    // Upload audio to WhatsApp and send it
-    const mediaId = await uploadAudioToWhatsApp(audioBuffer);
-    await sendAudioMessage(phoneNumber, mediaId);
-
-    res.json({
-      success: true,
-      translatedText,
-      language: targetLang,
-      audioSizeBytes: audioBuffer.length,
-    });
-  } catch (error) {
-    console.error("Error in /api/translate-audio:", error);
-    res.status(500).json({ error: "Failed to translate and send audio" });
-  }
-});
-
-async function sendTranslatedAudio(
-  recipientNumber: string,
-  englishText: string,
-  targetLanguage: SupportedLanguages
-): Promise<void> {
-  try {
-    const { translatedText, audioBuffer } = await translateAndSpeak(
-      englishText,
-      targetLanguage
-    );
-
-    console.log(`[Bot] Translated: "${translatedText.substring(0, 60)}..."`);
-
-    // Upload to WhatsApp and send
-    const mediaId = await uploadAudioToWhatsApp(audioBuffer);
-    await sendAudioMessage(recipientNumber, mediaId);
-
-    console.log(`[Bot] Translated audio sent to ${recipientNumber} in ${targetLanguage}`);
-  } catch (error) {
-    console.error("Error sending translated audio:", error);
-    // Fallback: send as text
-    await sendTextMessage(recipientNumber, englishText);
-  }
-}
 
 app.listen(3000, () => {
   console.log('Server is running on port 3000');

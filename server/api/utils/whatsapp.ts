@@ -55,9 +55,6 @@ export function buildListMenuMessage(
   };
 }
 
-/**
- * Uploads an audio buffer to WhatsApp Media API and returns the media ID.
- */
 export async function uploadAudioToWhatsApp(
   audioBuffer: Buffer,
   mimeType: string = "audio/mpeg"
@@ -95,9 +92,6 @@ export async function uploadAudioToWhatsApp(
   return data.id!;
 }
 
-/**
- * Sends an audio message to a WhatsApp user using a media ID.
- */
 export async function sendAudioMessage(
   recipientNumber: string,
   mediaId: string
@@ -134,9 +128,6 @@ export async function sendAudioMessage(
   console.log(`[WhatsApp] Audio message sent to ${recipientNumber}`);
 }
 
-/**
- * Sends a list menu (interactive buttons) to a WhatsApp user.
- */
 export async function sendListMenu(
   recipientNumber: string,
   options: ListOption[],

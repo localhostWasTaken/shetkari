@@ -36,7 +36,7 @@ export interface User {
     botState: BotState;
 }
 
-export interface UserDocument extends User, Document {}
+export interface UserDocument extends Omit<User, 'id'>, Document {}
 
 const LocationSchema = new Schema<Location>(
     {
