@@ -1,0 +1,12 @@
+[project]
+name = "data-sources"
+version = "0.1.0"
+description = "FastAPI server exposing soil-health and weather data endpoints"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "requests>=2.32.5",
+    "beautifulsoup4>=4.14.3",
+]
