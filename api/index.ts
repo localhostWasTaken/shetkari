@@ -3,7 +3,8 @@ import cors from 'cors';
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import ApiResponse from './models/apiResponse';
-import { buildListMenuMessage } from './utils/whatsapp';
+import { buildListMenuMessage, uploadAudioToWhatsApp, sendAudioMessage } from './utils/whatsapp';
+import { translateAndSpeak } from './utils/elevenlabs';
 import UserModel, { BotState, SupportedLanguages } from './entities/users';
 
 import { randomUUID } from 'node:crypto';
@@ -427,6 +428,78 @@ app.get('/', (req: Request, res: Response) => {
   };
   res.json(response);
 });
+
+/**
+ * POST /api/translate-audio
+ * Translates English text to the target language and sends audio via WhatsApp.
+ *
+ * Body:
+ *  - phoneNumber: string (recipient's WhatsApp number with country code)
+ *  - text: string (English text to translate)
+ *  - language: "en" | "hi" | "mr" (target language, defaults to user's saved language)
+ */
+app.post("/api/translate-audio", async (req: Request, res: Response) => {
+  try {
+    const { phoneNumber, text, language } = req.body;
+
+    if (!phoneNumber || !text) {
+      res.status(400).json({ error: "phoneNumber and text are required" });
+      return;
+    }
+
+    // Determine target language: from body, from user profile, or default to English
+    let targetLang: SupportedLanguages = language as SupportedLanguages;
+    if (!targetLang) {
+      const user = await UserModel.findOne({ phoneNumber });
+      targetLang = user?.language ?? SupportedLanguages.ENGLISH;
+    }
+
+    const { translatedText, audioBuffer } = await translateAndSpeak(text, targetLang);
+
+    // Upload audio to WhatsApp and send it
+    const mediaId = await uploadAudioToWhatsApp(audioBuffer);
+    await sendAudioMessage(phoneNumber, mediaId);
+
+    res.json({
+      success: true,
+      translatedText,
+      language: targetLang,
+      audioSizeBytes: audioBuffer.length,
+    });
+  } catch (error) {
+    console.error("Error in /api/translate-audio:", error);
+    res.status(500).json({ error: "Failed to translate and send audio" });
+  }
+});
+
+/**
+ * Translates English text to the user's language and sends it as a WhatsApp audio message.
+ * Can be called from anywhere in the bot flow.
+ */
+async function sendTranslatedAudio(
+  recipientNumber: string,
+  englishText: string,
+  targetLanguage: SupportedLanguages
+): Promise<void> {
+  try {
+    const { translatedText, audioBuffer } = await translateAndSpeak(
+      englishText,
+      targetLanguage
+    );
+
+    console.log(`[Bot] Translated: "${translatedText.substring(0, 60)}..."`);
+
+    // Upload to WhatsApp and send
+    const mediaId = await uploadAudioToWhatsApp(audioBuffer);
+    await sendAudioMessage(recipientNumber, mediaId);
+
+    console.log(`[Bot] Translated audio sent to ${recipientNumber} in ${targetLanguage}`);
+  } catch (error) {
+    console.error("Error sending translated audio:", error);
+    // Fallback: send as text
+    await sendTextMessage(recipientNumber, englishText);
+  }
+}
 
 app.listen(3000, () => {
   console.log('Server is running on port 3000');
