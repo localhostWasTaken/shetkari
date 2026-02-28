@@ -3,42 +3,80 @@ import cors from 'cors';
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import ApiResponse from './models/apiResponse';
-import { buildListMenuMessage } from './utils/whatsapp';
+import { buildListMenuMessage, uploadAudioToWhatsApp, sendAudioMessage } from './utils/whatsapp';
+import { translateAndSpeak } from './utils/elevenlabs';
 import UserModel, { BotState, SupportedLanguages } from './entities/users';
+
 import { randomUUID } from 'node:crypto';
 
 const locationRequestMessage: Record<SupportedLanguages, string> = {
-  [SupportedLanguages.ENGLISH]: "📍 Please share your farm's location.\nTap the 📎 (attachment) icon and select *Location*.",
-  [SupportedLanguages.HINDI]: "📍 कृपया अपने खेत की लोकेशन शेयर करें।\n📎 (अटैचमेंट) आइकन दबाएं और *Location* चुनें।",
-  [SupportedLanguages.MARATHI]: "📍 कृपया तुमच्या शेताचे स्थान शेअर करा।\n📎 (अटॅचमेंट) चिन्हावर टॅप करा आणि *Location* निवडा।",
+  [SupportedLanguages.ENGLISH]: "Please share your farm's location.\nTap the attachment icon and select Location.",
+  [SupportedLanguages.HINDI]: "कृपया अपने खेत की लोकेशन शेयर करें।\nअटैचमेंट आइकन दबाएं और Location चुनें।",
+  [SupportedLanguages.MARATHI]: "कृपया तुमच्या शेताचे स्थान शेअर करा।\nअटॅचमेंट चिन्हावर टॅप करा आणि Location निवडा.",
 };
 
 const locationSavedMessage: Record<SupportedLanguages, string> = {
-  [SupportedLanguages.ENGLISH]: "✅ Location saved! We're all set.",
-  [SupportedLanguages.HINDI]: "✅ लोकेशन सेव हो गई! सब तैयार है।",
-  [SupportedLanguages.MARATHI]: "✅ स्थान सेव्ह झाले! सर्व तयार आहे।",
+  [SupportedLanguages.ENGLISH]: "Your location has been saved successfully. You are all set.",
+  [SupportedLanguages.HINDI]: "आपकी लोकेशन सफलतापूर्वक सेव हो गई है। सब कुछ तैयार है।",
+  [SupportedLanguages.MARATHI]: "तुमचे स्थान यशस्वीरित्या सेव्ह झाले आहे. सर्व काही तयार आहे.",
+};
+
+const updateChoiceMessage: Record<SupportedLanguages, string> = {
+  [SupportedLanguages.ENGLISH]: "Please select what you would like to update.",
+  [SupportedLanguages.HINDI]: "कृपया चुनें कि आप क्या अपडेट करना चाहते हैं।",
+  [SupportedLanguages.MARATHI]: "कृपया तुम्हाला काय अपडेट करायचे आहे ते निवडा.",
+};
+
+const updateChoiceOptions: Record<SupportedLanguages, { id: string; title: string }[]> = {
+  [SupportedLanguages.ENGLISH]: [
+    { id: "update_language", title: "Language" },
+    { id: "update_location", title: "Location" },
+  ],
+  [SupportedLanguages.HINDI]: [
+    { id: "update_language", title: "भाषा" },
+    { id: "update_location", title: "लोकेशन" },
+  ],
+  [SupportedLanguages.MARATHI]: [
+    { id: "update_language", title: "भाषा" },
+    { id: "update_location", title: "स्थान" },
+  ],
+};
+
+const languageUpdatedMessage: Record<SupportedLanguages, string> = {
+  [SupportedLanguages.ENGLISH]: "Your language preference has been updated successfully.",
+  [SupportedLanguages.HINDI]: "आपकी भाषा सफलतापूर्वक अपडेट हो गई है।",
+  [SupportedLanguages.MARATHI]: "तुमची भाषा निवड यशस्वीरित्या अपडेट झाली आहे.",
+};
+
+const locationUpdatedMessage: Record<SupportedLanguages, string> = {
+  [SupportedLanguages.ENGLISH]: "Your location has been updated successfully.",
+  [SupportedLanguages.HINDI]: "आपकी लोकेशन सफलतापूर्वक अपडेट हो गई है।",
+  [SupportedLanguages.MARATHI]: "तुमचे स्थान यशस्वीरित्या अपडेट झाले आहे.",
 };
 
 const mainMenu: Record<SupportedLanguages, { body: string; options: { id: string; title: string }[] }> = {
   [SupportedLanguages.ENGLISH]: {
-    body: "👋 Hi, welcome to Shetkari!\nYour smart farming assistant.\n\nWhat can we help you with today?",
+    body: "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select an option from the menu below to get started.",
     options: [
-      { id: "menu_mandi", title: "🌾 Mandi Prices" },
-      { id: "menu_crop_plan", title: "🗓️ Crop Planning" },
+      { id: "menu_mandi", title: "Mandi Prices" },
+      { id: "menu_crop_plan", title: "Crop Planning" },
+      { id: "menu_update_details", title: "Update Details" },
     ],
   },
   [SupportedLanguages.HINDI]: {
-    body: "👋 नमस्ते, शेतकरी में आपका स्वागत है!\nआपका स्मार्ट खेती सहायक।\n\nआज हम आपकी क्या मदद कर सकते हैं?",
+    body: "शेतकरी में आपका स्वागत है।\nआपका स्मार्ट खेती सहायक।\n\nकृपया शुरू करने के लिए नीचे दिए गए मेनू से एक विकल्प चुनें।",
     options: [
-      { id: "menu_mandi", title: "🌾 मंडी भाव" },
-      { id: "menu_crop_plan", title: "🗓️ फसल योजना" },
+      { id: "menu_mandi", title: "मंडी भाव" },
+      { id: "menu_crop_plan", title: "फसल योजना" },
+      { id: "menu_update_details", title: "विवरण अपडेट करें" },
     ],
   },
   [SupportedLanguages.MARATHI]: {
-    body: "👋 नमस्कार, शेतकरीमध्ये आपले स्वागत आहे!\nतुमचा स्मार्ट शेती सहाय्यक।\n\nआज आम्ही तुम्हाला कशात मदत करू शकतो?",
+    body: "शेतकरीमध्ये आपले स्वागत आहे.\nतुमचा स्मार्ट शेती सहाय्यक.\n\nकृपया सुरू करण्यासाठी खालील मेनूमधून एक पर्याय निवडा.",
     options: [
-      { id: "menu_mandi", title: "🌾 मंडी भाव" },
-      { id: "menu_crop_plan", title: "🗓️ पीक नियोजन" },
+      { id: "menu_mandi", title: "मंडी भाव" },
+      { id: "menu_crop_plan", title: "पीक नियोजन" },
+      { id: "menu_update_details", title: "तपशील अपडेट करा" },
     ],
   },
 };
@@ -54,7 +92,7 @@ app.use(cors());
 app.use(express.json());
 
 app.get("/api/webhook/whatsapp", (req: Request, res: Response) => {
-  const VERIFY_TOKEN = "123";
+  const VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
 
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -155,7 +193,86 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
       return;
     }
 
+    // --- State: AWAITING_UPDATE_CHOICE ---
+    if (user.botState === BotState.AWAITING_UPDATE_CHOICE) {
+      const lang = user.language ?? SupportedLanguages.ENGLISH;
+      if (msgType === "interactive" && value.messages[0].interactive?.type === "button_reply") {
+        const buttonId: string = value.messages[0].interactive.button_reply.id;
+        if (buttonId === "update_language") {
+          user.botState = BotState.AWAITING_NEW_LANGUAGE;
+          await user.save();
+          await sendWelcomeAndLanguageSelection(farmerPhoneNumber);
+        } else if (buttonId === "update_location") {
+          user.botState = BotState.AWAITING_NEW_LOCATION;
+          await user.save();
+          await sendLocationRequest(farmerPhoneNumber, lang);
+        } else {
+          await sendUpdateChoiceMenu(farmerPhoneNumber, lang);
+        }
+      } else {
+        await sendUpdateChoiceMenu(farmerPhoneNumber, lang);
+      }
+      res.sendStatus(200);
+      return;
+    }
+
+    // --- State: AWAITING_NEW_LANGUAGE ---
+    if (user.botState === BotState.AWAITING_NEW_LANGUAGE) {
+      if (msgType === "interactive" && value.messages[0].interactive?.type === "button_reply") {
+        const buttonId: string = value.messages[0].interactive.button_reply.id;
+        const langMap: Record<string, SupportedLanguages> = {
+          lang_en: SupportedLanguages.ENGLISH,
+          lang_hi: SupportedLanguages.HINDI,
+          lang_mr: SupportedLanguages.MARATHI,
+        };
+        const selectedLang = langMap[buttonId];
+        if (selectedLang) {
+          user.language = selectedLang;
+          user.botState = BotState.IDLE;
+          await user.save();
+          await sendTextMessage(farmerPhoneNumber, languageUpdatedMessage[selectedLang]);
+          await sendMainMenu(farmerPhoneNumber, selectedLang);
+        } else {
+          await sendWelcomeAndLanguageSelection(farmerPhoneNumber);
+        }
+      } else {
+        await sendWelcomeAndLanguageSelection(farmerPhoneNumber);
+      }
+      res.sendStatus(200);
+      return;
+    }
+
+    // --- State: AWAITING_NEW_LOCATION ---
+    if (user.botState === BotState.AWAITING_NEW_LOCATION) {
+      const lang = user.language ?? SupportedLanguages.ENGLISH;
+      if (msgType === "location") {
+        const { latitude, longitude } = value.messages[0].location;
+        user.location = { latitude, longitude };
+        user.botState = BotState.IDLE;
+        await user.save();
+        await sendTextMessage(farmerPhoneNumber, locationUpdatedMessage[lang]);
+        await sendMainMenu(farmerPhoneNumber, lang);
+      } else {
+        await sendLocationRequest(farmerPhoneNumber, lang);
+      }
+      res.sendStatus(200);
+      return;
+    }
+
     // --- State: IDLE — show main menu ---
+    if (msgType === "interactive" && value.messages[0].interactive?.type === "button_reply") {
+      const buttonId: string = value.messages[0].interactive.button_reply.id;
+      const lang = user.language ?? SupportedLanguages.ENGLISH;
+      if (buttonId === "menu_update_details") {
+        user.botState = BotState.AWAITING_UPDATE_CHOICE;
+        await user.save();
+        await sendUpdateChoiceMenu(farmerPhoneNumber, lang);
+        res.sendStatus(200);
+        return;
+      }
+      // TODO: handle menu_mandi, menu_crop_plan
+    }
+
     await sendMainMenu(farmerPhoneNumber, user.language ?? SupportedLanguages.ENGLISH);
     res.sendStatus(200);
   } catch (error) {
@@ -175,7 +292,7 @@ async function sendWelcomeAndLanguageSelection(recipientNumber: string) {
       { id: "lang_hi", title: "हिन्दी" },
       { id: "lang_mr", title: "मराठी" }
     ],
-    "Welcome to Shetkari! 🌾\nYour smart farming assistant.\n\nPlease select your preferred language:\nकृपया अपनी भाषा चुनें:\nकृपया तुमची भाषा निवडा:"
+    "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
   );
 
   const url = `https://graph.facebook.com/v25.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
@@ -204,6 +321,39 @@ async function sendWelcomeAndLanguageSelection(recipientNumber: string) {
 
 async function sendLocationRequest(recipientNumber: string, language: SupportedLanguages) {
   await sendTextMessage(recipientNumber, locationRequestMessage[language]);
+}
+
+async function sendUpdateChoiceMenu(recipientNumber: string, language: SupportedLanguages) {
+  const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+
+  const payload = buildListMenuMessage(
+    recipientNumber,
+    updateChoiceOptions[language],
+    updateChoiceMessage[language]
+  );
+
+  const url = `https://graph.facebook.com/v25.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      console.error("Failed to send update choice menu:", JSON.stringify(data, null, 2));
+    } else {
+      console.log(`Update choice menu sent to ${recipientNumber}!`);
+    }
+  } catch (err) {
+    console.error("Network error sending update choice menu:", err);
+  }
 }
 
 async function sendMainMenu(recipientNumber: string, language: SupportedLanguages) {
@@ -278,6 +428,78 @@ app.get('/', (req: Request, res: Response) => {
   };
   res.json(response);
 });
+
+/**
+ * POST /api/translate-audio
+ * Translates English text to the target language and sends audio via WhatsApp.
+ *
+ * Body:
+ *  - phoneNumber: string (recipient's WhatsApp number with country code)
+ *  - text: string (English text to translate)
+ *  - language: "en" | "hi" | "mr" (target language, defaults to user's saved language)
+ */
+app.post("/api/translate-audio", async (req: Request, res: Response) => {
+  try {
+    const { phoneNumber, text, language } = req.body;
+
+    if (!phoneNumber || !text) {
+      res.status(400).json({ error: "phoneNumber and text are required" });
+      return;
+    }
+
+    // Determine target language: from body, from user profile, or default to English
+    let targetLang: SupportedLanguages = language as SupportedLanguages;
+    if (!targetLang) {
+      const user = await UserModel.findOne({ phoneNumber });
+      targetLang = user?.language ?? SupportedLanguages.ENGLISH;
+    }
+
+    const { translatedText, audioBuffer } = await translateAndSpeak(text, targetLang);
+
+    // Upload audio to WhatsApp and send it
+    const mediaId = await uploadAudioToWhatsApp(audioBuffer);
+    await sendAudioMessage(phoneNumber, mediaId);
+
+    res.json({
+      success: true,
+      translatedText,
+      language: targetLang,
+      audioSizeBytes: audioBuffer.length,
+    });
+  } catch (error) {
+    console.error("Error in /api/translate-audio:", error);
+    res.status(500).json({ error: "Failed to translate and send audio" });
+  }
+});
+
+/**
+ * Translates English text to the user's language and sends it as a WhatsApp audio message.
+ * Can be called from anywhere in the bot flow.
+ */
+async function sendTranslatedAudio(
+  recipientNumber: string,
+  englishText: string,
+  targetLanguage: SupportedLanguages
+): Promise<void> {
+  try {
+    const { translatedText, audioBuffer } = await translateAndSpeak(
+      englishText,
+      targetLanguage
+    );
+
+    console.log(`[Bot] Translated: "${translatedText.substring(0, 60)}..."`);
+
+    // Upload to WhatsApp and send
+    const mediaId = await uploadAudioToWhatsApp(audioBuffer);
+    await sendAudioMessage(recipientNumber, mediaId);
+
+    console.log(`[Bot] Translated audio sent to ${recipientNumber} in ${targetLanguage}`);
+  } catch (error) {
+    console.error("Error sending translated audio:", error);
+    // Fallback: send as text
+    await sendTextMessage(recipientNumber, englishText);
+  }
+}
 
 app.listen(3000, () => {
   console.log('Server is running on port 3000');
