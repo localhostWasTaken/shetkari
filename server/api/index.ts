@@ -3,7 +3,7 @@ import cors from 'cors';
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import ApiResponse from './models/apiResponse';
-import { buildListMenuMessage, uploadAudioToWhatsApp, sendAudioMessage } from './utils/whatsapp';
+import { sendListMenu, sendTextMessage, uploadAudioToWhatsApp, sendAudioMessage } from './utils/whatsapp';
 import { translateAndSpeak } from './utils/elevenlabs';
 import UserModel, { BotState, SupportedLanguages } from './entities/users';
 
@@ -164,7 +164,7 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
           user.language = selectedLang;
           user.botState = BotState.AWAITING_LOCATION;
           await user.save();
-          await sendLocationRequest(farmerPhoneNumber, selectedLang);
+          await sendTextMessage(farmerPhoneNumber, locationRequestMessage[selectedLang]);
         } else {
           await sendWelcomeAndLanguageSelection(farmerPhoneNumber);
         }
@@ -205,12 +205,12 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
         } else if (buttonId === "update_location") {
           user.botState = BotState.AWAITING_NEW_LOCATION;
           await user.save();
-          await sendLocationRequest(farmerPhoneNumber, lang);
+          await sendTextMessage(farmerPhoneNumber, locationRequestMessage[lang]);
         } else {
-          await sendUpdateChoiceMenu(farmerPhoneNumber, lang);
+          await sendListMenu(farmerPhoneNumber, updateChoiceOptions[lang], updateChoiceMessage[lang]);
         }
       } else {
-        await sendUpdateChoiceMenu(farmerPhoneNumber, lang);
+        await sendListMenu(farmerPhoneNumber, updateChoiceOptions[lang], updateChoiceMessage[lang]);
       }
       res.sendStatus(200);
       return;
@@ -231,7 +231,7 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
           user.botState = BotState.IDLE;
           await user.save();
           await sendTextMessage(farmerPhoneNumber, languageUpdatedMessage[selectedLang]);
-          await sendMainMenu(farmerPhoneNumber, selectedLang);
+          await sendListMenu(farmerPhoneNumber, mainMenu[selectedLang].options, mainMenu[selectedLang].body);
         } else {
           await sendWelcomeAndLanguageSelection(farmerPhoneNumber);
         }
@@ -251,9 +251,9 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
         user.botState = BotState.IDLE;
         await user.save();
         await sendTextMessage(farmerPhoneNumber, locationUpdatedMessage[lang]);
-        await sendMainMenu(farmerPhoneNumber, lang);
+        await sendListMenu(farmerPhoneNumber, mainMenu[lang].options, mainMenu[lang].body);
       } else {
-        await sendLocationRequest(farmerPhoneNumber, lang);
+        await sendTextMessage(farmerPhoneNumber, locationRequestMessage[lang]);
       }
       res.sendStatus(200);
       return;
@@ -266,14 +266,14 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
       if (buttonId === "menu_update_details") {
         user.botState = BotState.AWAITING_UPDATE_CHOICE;
         await user.save();
-        await sendUpdateChoiceMenu(farmerPhoneNumber, lang);
+        await sendListMenu(farmerPhoneNumber, updateChoiceOptions[lang], updateChoiceMessage[lang]);
         res.sendStatus(200);
         return;
       }
       // TODO: handle menu_mandi, menu_crop_plan
     }
 
-    await sendMainMenu(farmerPhoneNumber, user.language ?? SupportedLanguages.ENGLISH);
+    await sendListMenu(farmerPhoneNumber, mainMenu[user.language ?? SupportedLanguages.ENGLISH].options, mainMenu[user.language ?? SupportedLanguages.ENGLISH].body);
     res.sendStatus(200);
   } catch (error) {
     console.error("Error processing webhook:", error);
@@ -282,10 +282,7 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
 });
 
 async function sendWelcomeAndLanguageSelection(recipientNumber: string) {
-  const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
-
-  const payload = buildListMenuMessage(
+  await sendListMenu(
     recipientNumber,
     [
       { id: "lang_en", title: "English" },
@@ -294,128 +291,6 @@ async function sendWelcomeAndLanguageSelection(recipientNumber: string) {
     ],
     "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
   );
-
-  const url = `https://graph.facebook.com/v25.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
-
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      console.error("Failed to send Language Menu:", JSON.stringify(data, null, 2));
-    } else {
-      console.log(`Language Menu sent to ${recipientNumber}!`);
-    }
-  } catch (err) {
-    console.error("Network error:", err);
-  }
-}
-
-async function sendLocationRequest(recipientNumber: string, language: SupportedLanguages) {
-  await sendTextMessage(recipientNumber, locationRequestMessage[language]);
-}
-
-async function sendUpdateChoiceMenu(recipientNumber: string, language: SupportedLanguages) {
-  const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
-
-  const payload = buildListMenuMessage(
-    recipientNumber,
-    updateChoiceOptions[language],
-    updateChoiceMessage[language]
-  );
-
-  const url = `https://graph.facebook.com/v25.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
-
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      console.error("Failed to send update choice menu:", JSON.stringify(data, null, 2));
-    } else {
-      console.log(`Update choice menu sent to ${recipientNumber}!`);
-    }
-  } catch (err) {
-    console.error("Network error sending update choice menu:", err);
-  }
-}
-
-async function sendMainMenu(recipientNumber: string, language: SupportedLanguages) {
-  const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
-
-  const { body, options } = mainMenu[language];
-  const payload = buildListMenuMessage(recipientNumber, options, body);
-
-  const url = `https://graph.facebook.com/v25.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
-
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      console.error("Failed to send main menu:", JSON.stringify(data, null, 2));
-    } else {
-      console.log(`Main menu sent to ${recipientNumber} in ${language}!`);
-    }
-  } catch (err) {
-    console.error("Network error sending main menu:", err);
-  }
-}
-
-async function sendTextMessage(recipientNumber: string, text: string) {
-  const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
-
-  const payload = {
-    messaging_product: "whatsapp",
-    to: recipientNumber,
-    type: "text",
-    text: { body: text },
-  };
-
-  const url = `https://graph.facebook.com/v25.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
-
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      console.error("Failed to send text message:", JSON.stringify(data, null, 2));
-    }
-  } catch (err) {
-    console.error("Network error sending text message:", err);
-  }
 }
 
 app.get('/', (req: Request, res: Response) => {
@@ -429,15 +304,6 @@ app.get('/', (req: Request, res: Response) => {
   res.json(response);
 });
 
-/**
- * POST /api/translate-audio
- * Translates English text to the target language and sends audio via WhatsApp.
- *
- * Body:
- *  - phoneNumber: string (recipient's WhatsApp number with country code)
- *  - text: string (English text to translate)
- *  - language: "en" | "hi" | "mr" (target language, defaults to user's saved language)
- */
 app.post("/api/translate-audio", async (req: Request, res: Response) => {
   try {
     const { phoneNumber, text, language } = req.body;
@@ -472,10 +338,6 @@ app.post("/api/translate-audio", async (req: Request, res: Response) => {
   }
 });
 
-/**
- * Translates English text to the user's language and sends it as a WhatsApp audio message.
- * Can be called from anywhere in the bot flow.
- */
 async function sendTranslatedAudio(
   recipientNumber: string,
   englishText: string,
