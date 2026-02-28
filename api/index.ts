@@ -7,6 +7,18 @@ import { buildListMenuMessage } from './utils/whatsapp';
 import UserModel, { BotState, SupportedLanguages } from './entities/users';
 import { randomUUID } from 'node:crypto';
 
+const locationRequestMessage: Record<SupportedLanguages, string> = {
+  [SupportedLanguages.ENGLISH]: "📍 Please share your farm's location.\nTap the 📎 (attachment) icon and select *Location*.",
+  [SupportedLanguages.HINDI]: "📍 कृपया अपने खेत की लोकेशन शेयर करें।\n📎 (अटैचमेंट) आइकन दबाएं और *Location* चुनें।",
+  [SupportedLanguages.MARATHI]: "📍 कृपया तुमच्या शेताचे स्थान शेअर करा।\n📎 (अटॅचमेंट) चिन्हावर टॅप करा आणि *Location* निवडा।",
+};
+
+const locationSavedMessage: Record<SupportedLanguages, string> = {
+  [SupportedLanguages.ENGLISH]: "✅ Location saved! We're all set.",
+  [SupportedLanguages.HINDI]: "✅ लोकेशन सेव हो गई! सब तैयार है।",
+  [SupportedLanguages.MARATHI]: "✅ स्थान सेव्ह झाले! सर्व तयार आहे।",
+};
+
 const mainMenu: Record<SupportedLanguages, { body: string; options: { id: string; title: string }[] }> = {
   [SupportedLanguages.ENGLISH]: {
     body: "👋 Hi, welcome to Shetkari!\nYour smart farming assistant.\n\nWhat can we help you with today?",
@@ -114,7 +126,7 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
           user.language = selectedLang;
           user.botState = BotState.AWAITING_LOCATION;
           await user.save();
-          await sendLocationRequest(farmerPhoneNumber);
+          await sendLocationRequest(farmerPhoneNumber, selectedLang);
         } else {
           await sendWelcomeAndLanguageSelection(farmerPhoneNumber);
         }
@@ -134,7 +146,7 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
         user.location = { latitude, longitude };
         user.botState = BotState.IDLE;
         await user.save();
-        await sendTextMessage(farmerPhoneNumber, "✅ Location saved! We're all set.");
+        await sendTextMessage(farmerPhoneNumber, locationSavedMessage[user.language ?? SupportedLanguages.ENGLISH]);
       } else {
         // They sent something other than a location pin — re-prompt
         await sendTextMessage(farmerPhoneNumber, "jhattuboi location patav na green muli la tujhe chale sangen");
@@ -163,7 +175,7 @@ async function sendWelcomeAndLanguageSelection(recipientNumber: string) {
       { id: "lang_hi", title: "हिन्दी" },
       { id: "lang_mr", title: "मराठी" }
     ],
-    "Welcome to Shetkari!\nYour smart farming assistant.\n\nPlease select your preferred language:\nkrupaya apni bhasha chunein:\nkrupaya tumchi bhasha nivda:"
+    "Welcome to Shetkari! 🌾\nYour smart farming assistant.\n\nPlease select your preferred language:\nकृपया अपनी भाषा चुनें:\nकृपया तुमची भाषा निवडा:"
   );
 
   const url = `https://graph.facebook.com/v25.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
@@ -190,11 +202,8 @@ async function sendWelcomeAndLanguageSelection(recipientNumber: string) {
   }
 }
 
-async function sendLocationRequest(recipientNumber: string) {
-  await sendTextMessage(
-    recipientNumber,
-    "📍 Please share your farm's location.\nTap the 📎 (attachment) icon and select *Location*."
-  );
+async function sendLocationRequest(recipientNumber: string, language: SupportedLanguages) {
+  await sendTextMessage(recipientNumber, locationRequestMessage[language]);
 }
 
 async function sendMainMenu(recipientNumber: string, language: SupportedLanguages) {
