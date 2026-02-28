@@ -13,13 +13,14 @@ GET  /weather/history      → observed weather for a past date
 """
 
 from fastapi import FastAPI
-from routers import soil_health, weather
+from routers import mandi, soil_health, weather
 
 app = FastAPI(
     title="AfterMath Data Sources",
-    description="Soil health and weather data for Indian farm advisory.",
+    description="Soil health, weather, and mandi price data for Indian farm advisory.",
     version="1.0.0",
 )
 
 app.include_router(soil_health.router, prefix="/soil-health", tags=["Soil Health"])
 app.include_router(weather.router, prefix="/weather", tags=["Weather"])
+app.include_router(mandi.router, prefix="/mandi", tags=["Mandi"])
