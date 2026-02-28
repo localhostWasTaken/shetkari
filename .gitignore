@@ -1,5 +1,12 @@
 node_modules/
 .env
+dist/
+
+__pycache__/
+.DS_Store
+uv.lock
+
+.venv/
 dist/# Dependencies
 node_modules/
 package-lock.json
