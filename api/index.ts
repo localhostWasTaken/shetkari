@@ -7,6 +7,30 @@ import { buildListMenuMessage } from './utils/whatsapp';
 import UserModel, { BotState, SupportedLanguages } from './entities/users';
 import { randomUUID } from 'node:crypto';
 
+const mainMenu: Record<SupportedLanguages, { body: string; options: { id: string; title: string }[] }> = {
+  [SupportedLanguages.ENGLISH]: {
+    body: "👋 Hi, welcome to Shetkari!\nYour smart farming assistant.\n\nWhat can we help you with today?",
+    options: [
+      { id: "menu_mandi", title: "🌾 Mandi Prices" },
+      { id: "menu_crop_plan", title: "🗓️ Crop Planning" },
+    ],
+  },
+  [SupportedLanguages.HINDI]: {
+    body: "👋 नमस्ते, शेतकरी में आपका स्वागत है!\nआपका स्मार्ट खेती सहायक।\n\nआज हम आपकी क्या मदद कर सकते हैं?",
+    options: [
+      { id: "menu_mandi", title: "🌾 मंडी भाव" },
+      { id: "menu_crop_plan", title: "🗓️ फसल योजना" },
+    ],
+  },
+  [SupportedLanguages.MARATHI]: {
+    body: "👋 नमस्कार, शेतकरीमध्ये आपले स्वागत आहे!\nतुमचा स्मार्ट शेती सहाय्यक।\n\nआज आम्ही तुम्हाला कशात मदत करू शकतो?",
+    options: [
+      { id: "menu_mandi", title: "🌾 मंडी भाव" },
+      { id: "menu_crop_plan", title: "🗓️ पीक नियोजन" },
+    ],
+  },
+};
+
 const app = express();
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/shetkari';
@@ -119,8 +143,8 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
       return;
     }
 
-    // --- State: IDLE (future handlers go here) ---
-    await sendTextMessage(farmerPhoneNumber, "Sorry, I didn't understand that. Please wait for further instructions.");
+    // --- State: IDLE — show main menu ---
+    await sendMainMenu(farmerPhoneNumber, user.language ?? SupportedLanguages.ENGLISH);
     res.sendStatus(200);
   } catch (error) {
     console.error("Error processing webhook:", error);
@@ -171,6 +195,36 @@ async function sendLocationRequest(recipientNumber: string) {
     recipientNumber,
     "📍 Please share your farm's location.\nTap the 📎 (attachment) icon and select *Location*."
   );
+}
+
+async function sendMainMenu(recipientNumber: string, language: SupportedLanguages) {
+  const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+
+  const { body, options } = mainMenu[language];
+  const payload = buildListMenuMessage(recipientNumber, options, body);
+
+  const url = `https://graph.facebook.com/v25.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      console.error("Failed to send main menu:", JSON.stringify(data, null, 2));
+    } else {
+      console.log(`Main menu sent to ${recipientNumber} in ${language}!`);
+    }
+  } catch (err) {
+    console.error("Network error sending main menu:", err);
+  }
 }
 
 async function sendTextMessage(recipientNumber: string, text: string) {
