@@ -133,3 +133,72 @@ export async function sendAudioMessage(
 
   console.log(`[WhatsApp] Audio message sent to ${recipientNumber}`);
 }
+
+/**
+ * Sends a list menu (interactive buttons) to a WhatsApp user.
+ */
+export async function sendListMenu(
+  recipientNumber: string,
+  options: ListOption[],
+  body: string
+): Promise<void> {
+  const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+
+  const payload = buildListMenuMessage(recipientNumber, options, body);
+  const url = `https://graph.facebook.com/v25.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    console.error("Failed to send list menu:", JSON.stringify(data, null, 2));
+    throw new Error("Failed to send list menu");
+  }
+
+  console.log(`[WhatsApp] List menu sent to ${recipientNumber}`);
+}
+
+/**
+ * Sends a plain text message to a WhatsApp user.
+ */
+export async function sendTextMessage(
+  recipientNumber: string,
+  text: string
+): Promise<void> {
+  const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to: recipientNumber,
+    type: "text",
+    text: { body: text },
+  };
+
+  const url = `https://graph.facebook.com/v25.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    console.error("Failed to send text message:", JSON.stringify(data, null, 2));
+    throw new Error("Failed to send text message");
+  }
+
+  console.log(`[WhatsApp] Text message sent to ${recipientNumber}`);
+}
