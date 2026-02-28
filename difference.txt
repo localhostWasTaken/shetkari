@@ -1,0 +1,88 @@
+difference between normal message and reply to a list 
+Received WhatsApp webhook: {
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "2431189440676785",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15551884750",
+              "phone_number_id": "975883342280673"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "ANUJ MADKE"
+                },
+                "wa_id": "918424061440"
+              }
+            ],
+            "messages": [
+              {
+                "from": "918424061440",
+                "id": "wamid.HBgMOTE4NDI0MDYxNDQwFQIAEhggQUMwQkY4MTYyRjhCMDg0OUUwQ0ZDMEM2RDVFMzEyNjQA",
+                "timestamp": "1772311193",
+                "text": {
+                  "body": "Hi"
+                },
+                "type": "text"
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}
+Received WhatsApp webhook: {
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "2431189440676785",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15551884750",
+              "phone_number_id": "975883342280673"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "ANUJ MADKE"
+                },
+                "wa_id": "918424061440"
+              }
+            ],
+            "messages": [
+              {
+                "context": {
+                  "from": "15551884750",
+                  "id": "wamid.HBgMOTE4NDI0MDYxNDQwFQIAERgSNUU5REFDNTc2QjJBQTQ0NTBGAA=="
+                },
+                "from": "918424061440",
+                "id": "wamid.HBgMOTE4NDI0MDYxNDQwFQIAEhggQUNCRDlBNkFEMTNCQzJFQTZFOUNDRTQzQTNEQjBCNDIA",
+                "timestamp": "1772311198",
+                "type": "interactive",
+                "interactive": {
+                  "type": "button_reply",
+                  "button_reply": {
+                    "id": "lang_en",
+                    "title": "English"
+                  }
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}
+Message 
