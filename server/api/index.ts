@@ -3,11 +3,13 @@ import cors from 'cors';
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import ApiResponse from './models/apiResponse';
-import { sendListMenu, sendTextMessage, uploadAudioToWhatsApp, sendAudioMessage } from './utils/whatsapp';
-import { translateAndSpeak } from './utils/elevenlabs';
+import { sendListMenu, sendTextMessage } from './utils/whatsapp';
 import UserModel, { BotState, SupportedLanguages } from './entities/users';
-
+import CropPlanModel, { isCropPlanIncomplete } from './entities/crop_plan';
+import { cropPlanAnalysis } from './utils/crop_plan_analysis';
 import { randomUUID } from 'node:crypto';
+
+// ─── Static message tables ────────────────────────────────────────────────────
 
 const locationRequestMessage: Record<SupportedLanguages, string> = {
   [SupportedLanguages.ENGLISH]: "Please share your farm's location.\nTap the attachment icon and select Location.",
@@ -81,225 +83,257 @@ const mainMenu: Record<SupportedLanguages, { body: string; options: { id: string
   },
 };
 
+const messages: Record<SupportedLanguages, Record<string, string>> = {
+  [SupportedLanguages.ENGLISH]: {
+    cropCreationCancelled: 'Crop creation has been cancelled.',
+    welcomeMessage: 'Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा.',
+    selectLanguage: 'Please select your language / कृपया अपनी भाषा चुनें / कृपया तुमची भाषा निवडा.',
+    selectNewLanguage: 'Please select your new language / नई भाषा चुनें / नवीन भाषा निवडा.',
+    enterCropName: 'Please enter the crop name (e.g., Wheat, Rice) or type "cancel" to abort.',
+    errorTryAgain: 'An error occurred. Please try again from the main menu.',
+    enterSowingDate: 'Please enter the sowing date.\nExamples: "March 15", "15/03/2026", "2026-03-15"\n\nOr type "cancel" to abort.',
+    enterSowingDatePrompt: 'Please enter the sowing date (e.g., 2026-03-15) or type "cancel".',
+    invalidDate: 'The input could not be understood as a date. Please enter a valid date (e.g., 2026-03-15 or March 15th) or type "cancel".',
+    sowingDateSet: 'Sowing date set to ${date}.\n\nPlease enter your farm size in acres (e.g., 2.5) or type "cancel".',
+    enterFarmSize: 'Please enter your farm size in acres (e.g., 2.5) or type "cancel".',
+    invalidNumber: 'The input does not appear to be a valid number. Please enter farm size in acres (e.g., 2.5) or type "cancel".',
+    farmSizeSet: 'Farm size set to ${num} acres.\n\nPlease select your irrigation method.\nYou can also type: Rainfed, Borewell, Canal, Drip, or Sprinkler.\n\nOr type "cancel" to abort.',
+    selectIrrigation: 'Please select irrigation method (Rainfed, Borewell, Canal, Drip, Sprinkler) or type "cancel".',
+    invalidIrrigation: 'Please choose one of: Rainfed, Borewell, Canal, Drip, Sprinkler — or type "cancel".',
+    analysingCropPlan: 'Analysing your crop plan, please wait.',
+    cropPlanAnalysis: 'Crop Plan Analysis\n\n${analysis}',
+    cropPlanIncomplete: 'Crop plan saved but some details are missing. Please create a new one from the main menu.',
+    createCropPlan: 'Let us create your crop plan.\n\nPlease enter the crop name (e.g., Wheat, Rice, Cotton).\n\nOr type "cancel" at any time to abort.',
+  },
+  [SupportedLanguages.HINDI]: {
+    cropCreationCancelled: 'फसल निर्माण रद्द कर दिया गया है।',
+    welcomeMessage: 'Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा.',
+    selectLanguage: 'Please select your language / कृपया अपनी भाषा चुनें / कृपया तुमची भाषा निवडा.',
+    selectNewLanguage: 'Please select your new language / नई भाषा चुनें / नवीन भाषा निवडा.',
+    enterCropName: 'कृपया फसल का नाम दर्ज करें (उदाहरण के लिए, गेहूं, चावल) या "cancel" टाइप करके निरस्त करें।',
+    errorTryAgain: 'एक त्रुटि हुई। कृपया मुख्य मेनू से फिर से प्रयास करें।',
+    enterSowingDate: 'कृपया बोवनी की तारीख दर्ज करें।\nउदाहरण: "March 15", "15/03/2026", "2026-03-15"\n\nया "cancel" टाइप करके निरस्त करें।',
+    enterSowingDatePrompt: 'कृपया बोवनी की तारीख दर्ज करें (उदाहरण, 2026-03-15) या "cancel" टाइप करें।',
+    invalidDate: 'इनपुट को तारीख के रूप में समझा नहीं जा सका। कृपया एक वैध तारीख दर्ज करें (उदाहरण, 2026-03-15 या March 15th) या "cancel" टाइप करें।',
+    sowingDateSet: 'बोवनी की तारीख ${date} पर सेट की गई।\n\nकृपया अपने खेत का आकार एकड़ में दर्ज करें (उदाहरण, 2.5) या "cancel" टाइप करें।',
+    enterFarmSize: 'कृपया अपने खेत का आकार एकड़ में दर्ज करें (उदाहरण, 2.5) या "cancel" टाइप करें।',
+    invalidNumber: 'इनपुट एक वैध संख्या नहीं प्रतीत होता। कृपया खेत का आकार एकड़ में दर्ज करें (उदाहरण, 2.5) या "cancel" टाइप करें।',
+    farmSizeSet: 'खेत का आकार ${num} एकड़ पर सेट किया गया।\n\nकृपया अपनी सिंचाई विधि चुनें।\nआप टाइप भी कर सकते हैं: Rainfed, Borewell, Canal, Drip, or Sprinkler.\n\nया "cancel" टाइप करके निरस्त करें।',
+    selectIrrigation: 'कृपया सिंचाई विधि चुनें (Rainfed, Borewell, Canal, Drip, Sprinkler) या "cancel" टाइप करें।',
+    invalidIrrigation: 'कृपया इनमें से एक चुनें: Rainfed, Borewell, Canal, Drip, Sprinkler — या "cancel" टाइप करें।',
+    analysingCropPlan: 'आपकी फसल योजना का विश्लेषण किया जा रहा है, कृपया प्रतीक्षा करें।',
+    cropPlanAnalysis: 'फसल योजना विश्लेषण\n\n${analysis}',
+    cropPlanIncomplete: 'फसल योजना सहेजी गई लेकिन कुछ विवरण गायब हैं। कृपया मुख्य मेनू से एक नई बनाएं।',
+    createCropPlan: 'आइए आपकी फसल योजना बनाएं।\n\nकृपया फसल का नाम दर्ज करें (उदाहरण, गेहूं, चावल, कपास)।\n\nया किसी भी समय "cancel" टाइप करके निरस्त करें।',
+  },
+  [SupportedLanguages.MARATHI]: {
+    cropCreationCancelled: 'पीक निर्मिती रद्द करण्यात आली आहे.',
+    welcomeMessage: 'Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा.',
+    selectLanguage: 'Please select your language / कृपया अपनी भाषा चुनें / कृपया तुमची भाषा निवडा.',
+    selectNewLanguage: 'Please select your new language / नई भाषा चुनें / नवीन भाषा निवडा.',
+    enterCropName: 'कृपया पीकाचे नाव प्रविष्ट करा (उदाहरणार्थ, गहू, तांदूळ) किंवा "cancel" टाइप करून रद्द करा.',
+    errorTryAgain: 'एक त्रुटी आली. कृपया मुख्य मेनूमधून पुन्हा प्रयत्न करा.',
+    enterSowingDate: 'कृपया पेरणीची तारीख प्रविष्ट करा.\nउदाहरणे: "March 15", "15/03/2026", "2026-03-15"\n\nकिंवा "cancel" टाइप करून रद्द करा.',
+    enterSowingDatePrompt: 'कृपया पेरणीची तारीख प्रविष्ट करा (उदाहरण, 2026-03-15) किंवा "cancel" टाइप करा.',
+    invalidDate: 'इनपुटला तारीख म्हणून समजले नाही. कृपया वैध तारीख प्रविष्ट करा (उदाहरण, 2026-03-15 किंवा March 15th) किंवा "cancel" टाइप करा.',
+    sowingDateSet: 'पेरणीची तारीख ${date} वर सेट केली.\n\nकृपया तुमच्या शेताचा आकार एकरमध्ये प्रविष्ट करा (उदाहरण, 2.5) किंवा "cancel" टाइप करा.',
+    enterFarmSize: 'कृपया तुमच्या शेताचा आकार एकरमध्ये प्रविष्ट करा (उदाहरण, 2.5) किंवा "cancel" टाइप करा.',
+    invalidNumber: 'इनपुट वैध संख्या दिसत नाही. कृपया शेताचा आकार एकरमध्ये प्रविष्ट करा (उदाहरण, 2.5) किंवा "cancel" टाइप करा.',
+    farmSizeSet: 'शेताचा आकार ${num} एकरवर सेट केला.\n\nकृपया तुमची सिंचन पद्धत निवडा.\nतुम्ही टाइप करू शकता: Rainfed, Borewell, Canal, Drip, किंवा Sprinkler.\n\nकिंवा "cancel" टाइप करून रद्द करा.',
+    selectIrrigation: 'कृपया सिंचन पद्धत निवडा (Rainfed, Borewell, Canal, Drip, Sprinkler) किंवा "cancel" टाइप करा.',
+    invalidIrrigation: 'कृपया यापैकी एक निवडा: Rainfed, Borewell, Canal, Drip, Sprinkler — किंवा "cancel" टाइप करा.',
+    analysingCropPlan: 'तुमच्या पीक योजनेचे विश्लेषण केले जात आहे, कृपया थांबा.',
+    cropPlanAnalysis: 'पीक योजना विश्लेषण\n\n${analysis}',
+    cropPlanIncomplete: 'पीक योजना जतन झाली परंतु काही तपशील गहाळ आहेत. कृपया मुख्य मेनूमधून एक नवीन तयार करा.',
+    createCropPlan: 'चला तुमची पीक योजना तयार करूया.\n\nकृपया पीकाचे नाव प्रविष्ट करा (उदाहरणार्थ, गहू, तांदूळ, कापूस).\n\nकिंवा कोणत्याही वेळी "cancel" टाइप करून रद्द करा.',
+  },
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+async function sendMainMenu(phone: string, lang: SupportedLanguages) {
+  await sendListMenu(phone, mainMenu[lang].options, mainMenu[lang].body);
+}
+
+/**
+ * Use Gemini 1.5 Flash to decide whether a user's text represents a valid
+ * calendar date, and return that date as a JS Date — or null if it cannot.
+ */
+async function parseDateWithGemini(userText: string): Promise<Date | null> {
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (!geminiKey) {
+    const d = new Date(userText);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  const url =
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
+  const todaysDate = new Date().toISOString().split('T')[0];
+
+  const payload = {
+    contents: [
+      {
+        parts: [
+          {
+            text:
+              `You are a date parser. 
+              todays date is ${todaysDate}
+              The user sent this text: "${userText}"\n` +
+              `If it contains a valid date, reply with ONLY the ISO-8601 date string (YYYY-MM-DD) and nothing else.\n` +
+              `If it does NOT contain a valid date (e.g. random words, nonsense), reply with only the single word: null`,
+          },
+        ],
+      },
+    ],
+  };
+
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json() as any;
+    console.log('Gemini raw response:', JSON.stringify(data, null, 2));
+    const reply: string = (data?.candidates?.[0]?.content?.parts?.[0]?.text ?? 'null').trim();
+    console.log('Gemini date parse response:', reply);
+    if (!reply || reply.toLowerCase() === 'null') return null;
+    const d = new Date(reply);
+    return isNaN(d.getTime()) ? null : d;
+  } catch (err) {
+    console.error('[Gemini date parse] error:', err);
+    return null;
+  }
+}
+
+/** Delete the latest in-progress crop plan for a user and return to IDLE */
+async function cancelCropPlan(user: any, phone: string) {
+  const latest = await CropPlanModel.findOne({ userId: user.id }).sort({ createdAt: -1 });
+  if (latest) await CropPlanModel.deleteOne({ _id: latest._id });
+  user.botState = BotState.IDLE;
+  await user.save();
+  const lang: SupportedLanguages = user.language ?? SupportedLanguages.ENGLISH;
+  await sendTextMessage(phone, messages[lang].cropCreationCancelled);
+  await sendMainMenu(phone, lang);
+}
+
+// ─── Express app ──────────────────────────────────────────────────────────────
+
 const app = express();
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/shetkari';
-mongoose.connect(MONGODB_URI)
+mongoose
+  .connect(MONGODB_URI)
   .then(() => console.log('Connected to MongoDB'))
   .catch((err) => console.error('MongoDB connection error:', err));
 
 app.use(cors());
 app.use(express.json());
 
-app.get("/api/webhook/whatsapp", (req: Request, res: Response) => {
+// Webhook verification
+app.get('/api/webhook/whatsapp', (req: Request, res: Response) => {
   const VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
-
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("Webhook verified by Meta!");
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+    console.log('Webhook verified by Meta!');
     res.status(200).send(challenge);
   } else {
-    console.error("Verification failed. Tokens do not match.");
+    console.error('Verification failed. Tokens do not match.');
     res.sendStatus(403);
   }
 });
 
-app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
-  
+// ─── Main webhook handler ─────────────────────────────────────────────────────
+app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
   try {
-    const { body } = req;
-    
-    const value = body.entry?.[0]?.changes?.[0]?.value;
-    
+    const value = req.body.entry?.[0]?.changes?.[0]?.value;
+
     if (value?.statuses?.[0]) {
-      const status = value.statuses[0].status;
-      console.log(`Message status update received: ${status}`);
       res.sendStatus(200);
       return;
     }
-    
+
     if (!value?.messages?.[0]) {
-      console.log("Webhook received with no messages or statuses, ignoring.");
       res.sendStatus(200);
       return;
     }
-    
-    console.log("Received WhatsApp webhook:", JSON.stringify(req.body, null, 2));
-    const farmerPhoneNumber = value.messages[0].from;
 
+    console.log('Received WhatsApp webhook:', JSON.stringify(req.body, null, 2));
+
+    const farmerPhoneNumber: string = value.messages[0].from;
+    const msgType: string = value.messages[0].type;
+
+    // ── New user ──────────────────────────────────────────────────────────────
     let user = await UserModel.findOne({ phoneNumber: farmerPhoneNumber });
-
     if (!user) {
       user = await UserModel.create({
         id: randomUUID(),
         phoneNumber: farmerPhoneNumber,
-        createdAt: new Date(),
-        updatedAt: new Date(),
         botState: BotState.AWAITING_LANGUAGE,
       });
-      console.log("New user created:", user._id);
       await sendListMenu(
         farmerPhoneNumber,
         [
-          { id: "lang_en", title: "English" },
-          { id: "lang_hi", title: "हिन्दी" },
-          { id: "lang_mr", title: "मराठी" }
+          { id: 'lang_en', title: 'English' },
+          { id: 'lang_hi', title: 'हिन्दी' },
+          { id: 'lang_mr', title: 'मराठी' },
         ],
-        "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
+        messages[SupportedLanguages.ENGLISH].welcomeMessage
       );
       res.sendStatus(200);
       return;
     }
 
-    const msgType = value.messages[0].type;
+    const lang: SupportedLanguages = user.language ?? SupportedLanguages.ENGLISH;
 
-    // --- State: AWAITING_LANGUAGE ---
+    // Convenience: extract button id and plain text body once
+    const buttonId: string | null =
+      msgType === 'interactive' && value.messages[0].interactive?.type === 'button_reply'
+        ? value.messages[0].interactive.button_reply.id
+        : null;
+
+    const textBody: string | null =
+      msgType === 'text' ? (value.messages[0].text?.body?.trim() ?? null) : null;
+
+    // ── State: AWAITING_LANGUAGE / NEW ────────────────────────────────────────
     if (user.botState === BotState.AWAITING_LANGUAGE || user.botState === BotState.NEW) {
-      if (msgType === "interactive" && value.messages[0].interactive?.type === "button_reply") {
-        const buttonId: string = value.messages[0].interactive.button_reply.id;
-
-        const langMap: Record<string, SupportedLanguages> = {
-          lang_en: SupportedLanguages.ENGLISH,
-          lang_hi: SupportedLanguages.HINDI,
-          lang_mr: SupportedLanguages.MARATHI,
-        };
-
-        const selectedLang = langMap[buttonId];
-        if (selectedLang) {
-          user.language = selectedLang;
-          user.botState = BotState.AWAITING_LOCATION;
-          await user.save();
-          await sendTextMessage(farmerPhoneNumber, locationRequestMessage[selectedLang]);
-        } else {
-          await sendListMenu(
-            farmerPhoneNumber,
-            [
-              { id: "lang_en", title: "English" },
-              { id: "lang_hi", title: "हिन्दी" },
-              { id: "lang_mr", title: "मराठी" }
-            ],
-            "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
-          );
-        }
+      const langMap: Record<string, SupportedLanguages> = {
+        lang_en: SupportedLanguages.ENGLISH,
+        lang_hi: SupportedLanguages.HINDI,
+        lang_mr: SupportedLanguages.MARATHI,
+      };
+      const selectedLang = buttonId ? langMap[buttonId] : undefined;
+      if (selectedLang) {
+        user.language = selectedLang;
+        user.botState = BotState.AWAITING_LOCATION;
+        await user.save();
+        await sendTextMessage(farmerPhoneNumber, locationRequestMessage[selectedLang]);
       } else {
-        // They sent something other than a language button — re-prompt
-        await sendTextMessage(farmerPhoneNumber, "loduuuuuu, sangitlaye te kar na");
         await sendListMenu(
           farmerPhoneNumber,
           [
-            { id: "lang_en", title: "English" },
-            { id: "lang_hi", title: "हिन्दी" },
-            { id: "lang_mr", title: "मराठी" }
+            { id: 'lang_en', title: 'English' },
+            { id: 'lang_hi', title: 'हिन्दी' },
+            { id: 'lang_mr', title: 'मराठी' },
           ],
-          "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
+          messages[lang].selectLanguage
         );
       }
       res.sendStatus(200);
       return;
     }
 
-    // --- State: AWAITING_LOCATION ---
+    // ── State: AWAITING_LOCATION ──────────────────────────────────────────────
     if (user.botState === BotState.AWAITING_LOCATION) {
-      if (msgType === "location") {
+      if (msgType === 'location') {
         const { latitude, longitude } = value.messages[0].location;
         user.location = { latitude, longitude };
         user.botState = BotState.IDLE;
         await user.save();
-        await sendTextMessage(farmerPhoneNumber, locationSavedMessage[user.language ?? SupportedLanguages.ENGLISH]);
-      } else {
-        // They sent something other than a location pin — re-prompt
-        await sendTextMessage(farmerPhoneNumber, "jhattuboi location patav na green muli la tujhe chale sangen");
-      }
-      res.sendStatus(200);
-      return;
-    }
-
-    // --- State: AWAITING_UPDATE_CHOICE ---
-    if (user.botState === BotState.AWAITING_UPDATE_CHOICE) {
-      const lang = user.language ?? SupportedLanguages.ENGLISH;
-      if (msgType === "interactive" && value.messages[0].interactive?.type === "button_reply") {
-        const buttonId: string = value.messages[0].interactive.button_reply.id;
-        if (buttonId === "update_language") {
-          user.botState = BotState.AWAITING_NEW_LANGUAGE;
-          await user.save();
-          await sendListMenu(
-            farmerPhoneNumber,
-            [
-              { id: "lang_en", title: "English" },
-              { id: "lang_hi", title: "हिन्दी" },
-              { id: "lang_mr", title: "मराठी" }
-            ],
-            "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
-          );
-        } else if (buttonId === "update_location") {
-          user.botState = BotState.AWAITING_NEW_LOCATION;
-          await user.save();
-          await sendTextMessage(farmerPhoneNumber, locationRequestMessage[lang]);
-        } else {
-          await sendListMenu(farmerPhoneNumber, updateChoiceOptions[lang], updateChoiceMessage[lang]);
-        }
-      } else {
-        await sendListMenu(farmerPhoneNumber, updateChoiceOptions[lang], updateChoiceMessage[lang]);
-      }
-      res.sendStatus(200);
-      return;
-    }
-
-    // --- State: AWAITING_NEW_LANGUAGE ---
-    if (user.botState === BotState.AWAITING_NEW_LANGUAGE) {
-      if (msgType === "interactive" && value.messages[0].interactive?.type === "button_reply") {
-        const buttonId: string = value.messages[0].interactive.button_reply.id;
-        const langMap: Record<string, SupportedLanguages> = {
-          lang_en: SupportedLanguages.ENGLISH,
-          lang_hi: SupportedLanguages.HINDI,
-          lang_mr: SupportedLanguages.MARATHI,
-        };
-        const selectedLang = langMap[buttonId];
-        if (selectedLang) {
-          user.language = selectedLang;
-          user.botState = BotState.IDLE;
-          await user.save();
-          await sendTextMessage(farmerPhoneNumber, languageUpdatedMessage[selectedLang]);
-          await sendListMenu(farmerPhoneNumber, mainMenu[selectedLang].options, mainMenu[selectedLang].body);
-        } else {
-          await sendListMenu(
-            farmerPhoneNumber,
-            [
-              { id: "lang_en", title: "English" },
-              { id: "lang_hi", title: "हिन्दी" },
-              { id: "lang_mr", title: "मराठी" }
-            ],
-            "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
-          );
-        }
-      } else {
-        await sendListMenu(
-          farmerPhoneNumber,
-          [
-            { id: "lang_en", title: "English" },
-            { id: "lang_hi", title: "हिन्दी" },
-            { id: "lang_mr", title: "मराठी" }
-          ],
-          "Welcome to Shetkari.\nYour smart farming assistant.\n\nPlease select your preferred language.\nकृपया अपनी भाषा चुनें।\nकृपया तुमची भाषा निवडा."
-        );
-      }
-      res.sendStatus(200);
-      return;
-    }
-
-    // --- State: AWAITING_NEW_LOCATION ---
-    if (user.botState === BotState.AWAITING_NEW_LOCATION) {
-      const lang = user.language ?? SupportedLanguages.ENGLISH;
-      if (msgType === "location") {
-        const { latitude, longitude } = value.messages[0].location;
-        user.location = { latitude, longitude };
-        user.botState = BotState.IDLE;
-        await user.save();
-        await sendTextMessage(farmerPhoneNumber, locationUpdatedMessage[lang]);
-        await sendListMenu(farmerPhoneNumber, mainMenu[lang].options, mainMenu[lang].body);
+        await sendTextMessage(farmerPhoneNumber, locationSavedMessage[lang]);
+        await sendMainMenu(farmerPhoneNumber, lang);
       } else {
         await sendTextMessage(farmerPhoneNumber, locationRequestMessage[lang]);
       }
@@ -307,35 +341,310 @@ app.post("/api/webhook/whatsapp", async (req: Request, res: Response) => {
       return;
     }
 
-    // --- State: IDLE — show main menu ---
-    if (msgType === "interactive" && value.messages[0].interactive?.type === "button_reply") {
-      const buttonId: string = value.messages[0].interactive.button_reply.id;
-      const lang = user.language ?? SupportedLanguages.ENGLISH;
-      if (buttonId === "menu_update_details") {
-        user.botState = BotState.AWAITING_UPDATE_CHOICE;
+    // ── State: AWAITING_UPDATE_CHOICE ─────────────────────────────────────────
+    if (user.botState === BotState.AWAITING_UPDATE_CHOICE) {
+      if (buttonId === 'update_language') {
+        user.botState = BotState.AWAITING_NEW_LANGUAGE;
         await user.save();
+        await sendListMenu(
+          farmerPhoneNumber,
+          [
+            { id: 'lang_en', title: 'English' },
+            { id: 'lang_hi', title: 'हिन्दी' },
+            { id: 'lang_mr', title: 'मराठी' },
+          ],
+          messages[lang].selectNewLanguage
+        );
+      } else if (buttonId === 'update_location') {
+        user.botState = BotState.AWAITING_NEW_LOCATION;
+        await user.save();
+        await sendTextMessage(farmerPhoneNumber, locationRequestMessage[lang]);
+      } else {
         await sendListMenu(farmerPhoneNumber, updateChoiceOptions[lang], updateChoiceMessage[lang]);
+      }
+      res.sendStatus(200);
+      return;
+    }
+
+    // ── State: AWAITING_NEW_LANGUAGE ──────────────────────────────────────────
+    if (user.botState === BotState.AWAITING_NEW_LANGUAGE) {
+      const langMap: Record<string, SupportedLanguages> = {
+        lang_en: SupportedLanguages.ENGLISH,
+        lang_hi: SupportedLanguages.HINDI,
+        lang_mr: SupportedLanguages.MARATHI,
+      };
+      const selectedLang = buttonId ? langMap[buttonId] : undefined;
+      if (selectedLang) {
+        user.language = selectedLang;
+        user.botState = BotState.IDLE;
+        await user.save();
+        await sendTextMessage(farmerPhoneNumber, languageUpdatedMessage[selectedLang]);
+        await sendMainMenu(farmerPhoneNumber, selectedLang);
+      } else {
+        await sendListMenu(
+          farmerPhoneNumber,
+          [
+            { id: 'lang_en', title: 'English' },
+            { id: 'lang_hi', title: 'हिन्दी' },
+            { id: 'lang_mr', title: 'मराठी' },
+          ],
+          messages[lang].selectNewLanguage
+        );
+      }
+      res.sendStatus(200);
+      return;
+    }
+
+    // ── State: AWAITING_NEW_LOCATION ──────────────────────────────────────────
+    if (user.botState === BotState.AWAITING_NEW_LOCATION) {
+      if (msgType === 'location') {
+        const { latitude, longitude } = value.messages[0].location;
+        user.location = { latitude, longitude };
+        user.botState = BotState.IDLE;
+        await user.save();
+        await sendTextMessage(farmerPhoneNumber, locationUpdatedMessage[lang]);
+        await sendMainMenu(farmerPhoneNumber, lang);
+      } else {
+        await sendTextMessage(farmerPhoneNumber, locationRequestMessage[lang]);
+      }
+      res.sendStatus(200);
+      return;
+    }
+
+    // ── State: AWAITING_CROP_NAME ─────────────────────────────────────────────
+    if (user.botState === BotState.AWAITING_CROP_NAME) {
+      if (!textBody) {
+        await sendTextMessage(farmerPhoneNumber, messages[lang].enterCropName);
         res.sendStatus(200);
         return;
       }
-      // TODO: handle menu_mandi, menu_crop_plan
+      if (textBody.toLowerCase() === 'cancel') {
+        await cancelCropPlan(user, farmerPhoneNumber);
+        res.sendStatus(200);
+        return;
+      }
+      const crop = await CropPlanModel.findOne({ userId: user.id, cropName: null }).sort({ createdAt: -1 });
+      if (!crop) {
+        await sendTextMessage(farmerPhoneNumber, messages[lang].errorTryAgain);
+        user.botState = BotState.IDLE;
+        await user.save();
+        res.sendStatus(200);
+        return;
+      }
+      crop.cropName = textBody;
+      await crop.save();
+      user.botState = BotState.AWAITING_SOWING_DATE;
+      await user.save();
+      await sendTextMessage(
+        farmerPhoneNumber,
+        messages[lang].enterSowingDate
+      );
+      res.sendStatus(200);
+      return;
     }
 
-    await sendListMenu(farmerPhoneNumber, mainMenu[user.language ?? SupportedLanguages.ENGLISH].options, mainMenu[user.language ?? SupportedLanguages.ENGLISH].body);
+    // ── State: AWAITING_SOWING_DATE ───────────────────────────────────────────
+    if (user.botState === BotState.AWAITING_SOWING_DATE) {
+      if (!textBody) {
+        await sendTextMessage(farmerPhoneNumber, messages[lang].enterSowingDatePrompt);
+        res.sendStatus(200);
+        return;
+      }
+      if (textBody.toLowerCase() === 'cancel') {
+        await cancelCropPlan(user, farmerPhoneNumber);
+        res.sendStatus(200);
+        return;
+      }
+
+      const parsedDate = await parseDateWithGemini(textBody);
+      if (!parsedDate) {
+        await sendTextMessage(
+          farmerPhoneNumber,
+          messages[lang].invalidDate
+        );
+        res.sendStatus(200);
+        return;
+      }
+
+      const crop = await CropPlanModel.findOne({ userId: user.id }).sort({ createdAt: -1 });
+      if (!crop) {
+        await sendTextMessage(farmerPhoneNumber, messages[lang].errorTryAgain);
+        user.botState = BotState.IDLE;
+        await user.save();
+        res.sendStatus(200);
+        return;
+      }
+      crop.sowingDate = parsedDate;
+      await crop.save();
+      user.botState = BotState.AWAITING_FARM_SIZE;
+      await user.save();
+      await sendTextMessage(
+        farmerPhoneNumber,
+        messages[lang].sowingDateSet.replace('${date}', parsedDate.toDateString())
+      );
+      res.sendStatus(200);
+      return;
+    }
+
+    // ── State: AWAITING_FARM_SIZE ─────────────────────────────────────────────
+    if (user.botState === BotState.AWAITING_FARM_SIZE) {
+      if (!textBody) {
+        await sendTextMessage(farmerPhoneNumber, messages[lang].enterFarmSize);
+        res.sendStatus(200);
+        return;
+      }
+      if (textBody.toLowerCase() === 'cancel') {
+        await cancelCropPlan(user, farmerPhoneNumber);
+        res.sendStatus(200);
+        return;
+      }
+      const num = parseFloat(textBody.replace(/[^0-9.]/g, ''));
+      if (isNaN(num) || num <= 0) {
+        await sendTextMessage(
+          farmerPhoneNumber,
+          messages[lang].invalidNumber
+        );
+        res.sendStatus(200);
+        return;
+      }
+      const crop = await CropPlanModel.findOne({ userId: user.id }).sort({ createdAt: -1 });
+      if (!crop) {
+        await sendTextMessage(farmerPhoneNumber, messages[lang].errorTryAgain);
+        user.botState = BotState.IDLE;
+        await user.save();
+        res.sendStatus(200);
+        return;
+      }
+      crop.farmSizeAcres = num;
+      await crop.save();
+      user.botState = BotState.AWAITING_IRRIGATION_METHOD;
+      await user.save();
+      // WhatsApp buttons: max 3 per message — send first 3, user can type others
+      await sendListMenu(
+        farmerPhoneNumber,
+        [
+          { id: 'irrigation_rainfed',  title: 'Rainfed'  },
+          { id: 'irrigation_borewell', title: 'Borewell' },
+          { id: 'irrigation_canal',    title: 'Canal'    },
+        ],
+        messages[lang].farmSizeSet.replace('${num}', num.toString())
+      );
+      res.sendStatus(200);
+      return;
+    }
+
+    // ── State: AWAITING_IRRIGATION_METHOD ─────────────────────────────────────
+    if (user.botState === BotState.AWAITING_IRRIGATION_METHOD) {
+      const rawInput: string | null = buttonId ?? textBody;
+
+      if (!rawInput) {
+        await sendTextMessage(
+          farmerPhoneNumber,
+          messages[lang].selectIrrigation
+        );
+        res.sendStatus(200);
+        return;
+      }
+      if (rawInput.toLowerCase() === 'cancel') {
+        await cancelCropPlan(user, farmerPhoneNumber);
+        res.sendStatus(200);
+        return;
+      }
+
+      const irrigationMap: Record<string, string> = {
+        irrigation_rainfed:   'Rainfed',
+        irrigation_borewell:  'Borewell',
+        irrigation_canal:     'Canal',
+        irrigation_drip:      'Drip',
+        irrigation_sprinkler: 'Sprinkler',
+        rainfed:              'Rainfed',
+        borewell:             'Borewell',
+        canal:                'Canal',
+        drip:                 'Drip',
+        sprinkler:            'Sprinkler',
+      };
+      const irrigation = irrigationMap[rawInput.toLowerCase()];
+      if (!irrigation) {
+        await sendTextMessage(
+          farmerPhoneNumber,
+          messages[lang].invalidIrrigation
+        );
+        res.sendStatus(200);
+        return;
+      }
+
+      const crop = await CropPlanModel.findOne({ userId: user.id }).sort({ createdAt: -1 });
+      if (!crop) {
+        await sendTextMessage(farmerPhoneNumber, messages[lang].errorTryAgain);
+        user.botState = BotState.IDLE;
+        await user.save();
+        res.sendStatus(200);
+        return;
+      }
+      crop.irrigationMethod = irrigation as any;
+      await crop.save();
+
+      // Check completeness, then run analysis
+      if (!isCropPlanIncomplete(crop as any)) {
+        await sendTextMessage(farmerPhoneNumber, messages[lang].analysingCropPlan);
+        const analysis = await cropPlanAnalysis(crop as any, lang);
+        await sendTextMessage(farmerPhoneNumber, messages[lang].cropPlanAnalysis.replace('${analysis}', analysis));
+      } else {
+        await sendTextMessage(
+          farmerPhoneNumber,
+          messages[lang].cropPlanIncomplete
+        );
+      }
+      user.botState = BotState.IDLE;
+      await user.save();
+      res.sendStatus(200);
+      return;
+    }
+
+    // ── State: IDLE (and fallback) ─────────────────────────────────────────────
+    if (buttonId === 'menu_update_details') {
+      user.botState = BotState.AWAITING_UPDATE_CHOICE;
+      await user.save();
+      await sendListMenu(farmerPhoneNumber, updateChoiceOptions[lang], updateChoiceMessage[lang]);
+      res.sendStatus(200);
+      return;
+    }
+
+    if (buttonId === 'menu_crop_plan') {
+      await CropPlanModel.create({
+        id: randomUUID(),
+        userId: user.id,
+        cropName: null,
+        sowingDate: null,
+        farmSizeAcres: null,
+        irrigationMethod: null,
+      });
+      user.botState = BotState.AWAITING_CROP_NAME;
+      await user.save();
+      await sendTextMessage(
+        farmerPhoneNumber,
+        messages[lang].createCropPlan
+      );
+      res.sendStatus(200);
+      return;
+    }
+
+    // Default: show main menu
+    await sendMainMenu(farmerPhoneNumber, lang);
     res.sendStatus(200);
   } catch (error) {
-    console.error("Error processing webhook:", error);
+    console.error('Error processing webhook:', error);
     res.sendStatus(500);
   }
 });
 
-app.get('/', (req: Request, res: Response) => {
-  console.log('Received GET request at /api/hello');
+// ─── Health check ─────────────────────────────────────────────────────────────
+app.get('/', (_req: Request, res: Response) => {
   const response: ApiResponse = {
     statusCode: 200,
     data: 'Hello World',
     message: 'Success',
-    error: null
+    error: null,
   };
   res.json(response);
 });
