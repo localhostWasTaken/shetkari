@@ -23,11 +23,12 @@ async def best_rates(
     radius_km: int = Query(100, description="Search radius in km"),
 ) -> dict:
     """Get best mandi rates for a commodity with 7-day average pricing."""
-    location_filter = {}
-    # Oepncage to be used to get state and district
+    # TODO: OpenCage not working — hardcoded to Maharashtra/Thane until fixed
+    state:    Optional[str] = "Maharashtra"
+    district: Optional[str] = "Thane"
+    location_filter: dict = {"state": state, "district": district}
+
     prices = service.get_commodity_prices(commodity, location_filter)
-
-
     prices = service.get_7day_average_prices(prices)
 
     if not prices:
@@ -45,7 +46,7 @@ async def best_rates(
     return {
         "success": True,
         "commodity": commodity,
-        "location": {"state": state, "district": district},
+        "location": {"latitude": latitude, "longitude": longitude, "state": state, "district": district},
         "search_radius": f"{radius_km} km",
         "calculation_method": "7-day average prices",
         "best_mandi": result["best_mandi"],
@@ -158,15 +159,10 @@ async def get_commodities(
     expected_language: Optional[str] = Query("English"),
 ) -> dict:
     """List available commodities for the farmer's location, translated into the expected language."""
-    geo = _reverse_geocode(latitude, longitude)
-    state    = geo["state"]
-    district = geo["district"]
-
-    filters: dict = {}
-    if state:
-        filters["state"] = state
-    if district:
-        filters["district"] = district
+    # TODO: OpenCage not working — hardcoded to Maharashtra/Thane until fixed
+    state:    str = "Maharashtra"
+    district: str = "Thane"
+    filters: dict = {"state": state, "district": district}
 
     commodities = service.get_commodities(filters)
     translated  = service.get_commodities_in_expected_language(expected_language or "English", commodities)
