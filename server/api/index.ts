@@ -161,13 +161,14 @@ async function sendMainMenu(phone: string, lang: SupportedLanguages) {
  */
 async function parseDateWithGemini(userText: string): Promise<Date | null> {
   const geminiKey = process.env.GEMINI_API_KEY;
+  const geminiModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   if (!geminiKey) {
     const d = new Date(userText);
     return isNaN(d.getTime()) ? null : d;
   }
 
   const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
+    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiKey}`;
   const todaysDate = new Date().toISOString().split('T')[0];
 
   const payload = {
