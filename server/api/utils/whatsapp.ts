@@ -158,6 +158,64 @@ export async function sendListMenu(
 }
 
 /**
+ * Sends a WhatsApp interactive list message (supports up to 10 rows per section).
+ * Use this instead of sendListMenu when you need more than 3 options.
+ */
+export async function sendInteractiveList(
+  recipientNumber: string,
+  body: string,
+  buttonLabel: string,
+  sectionTitle: string,
+  rows: { id: string; title: string; description?: string }[]
+): Promise<void> {
+  const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: recipientNumber,
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: body },
+      action: {
+        button: buttonLabel,
+        sections: [
+          {
+            title: sectionTitle,
+            rows: rows.map((r) => ({
+              id: r.id,
+              title: r.title,
+              ...(r.description ? { description: r.description } : {}),
+            })),
+          },
+        ],
+      },
+    },
+  };
+
+  const url = `https://graph.facebook.com/v25.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    console.error("Failed to send interactive list:", JSON.stringify(data, null, 2));
+    throw new Error("Failed to send interactive list");
+  }
+
+  console.log(`[WhatsApp] Interactive list sent to ${recipientNumber}`);
+}
+
+/**
  * Sends a plain text message to a WhatsApp user.
  */
 export async function sendTextMessage(

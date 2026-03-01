@@ -3,10 +3,11 @@ import cors from 'cors';
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import ApiResponse from './models/apiResponse';
-import { sendListMenu, sendTextMessage } from './utils/whatsapp';
+import { sendListMenu, sendTextMessage, sendInteractiveList } from './utils/whatsapp';
 import UserModel, { BotState, SupportedLanguages } from './entities/users';
 import CropPlanModel, { isCropPlanIncomplete } from './entities/crop_plan';
 import { cropPlanAnalysis } from './utils/crop_plan_analysis';
+import { getMandiProductsForUser, getMandiAnalysisForProduct, GeoLocation } from './utils/mandi_analysis';
 import { randomUUID } from 'node:crypto';
 
 // ─── Static message tables ────────────────────────────────────────────────────
@@ -91,9 +92,9 @@ const messages: Record<SupportedLanguages, Record<string, string>> = {
     selectNewLanguage: 'Please select your new language / नई भाषा चुनें / नवीन भाषा निवडा.',
     enterCropName: 'Please enter the crop name (e.g., Wheat, Rice) or type "cancel" to abort.',
     errorTryAgain: 'An error occurred. Please try again from the main menu.',
-    enterSowingDate: 'Please enter the sowing date.\nExamples: "March 15", "15/03/2026", "2026-03-15"\n\nOr type "cancel" to abort.',
-    enterSowingDatePrompt: 'Please enter the sowing date (e.g., 2026-03-15) or type "cancel".',
-    invalidDate: 'The input could not be understood as a date. Please enter a valid date (e.g., 2026-03-15 or March 15th) or type "cancel".',
+    enterSowingDate: 'Please enter the sowing date.\nExamples: "March 15", "15/03/2026", "15-3-2026"\n\nOr type "cancel" to abort.',
+    enterSowingDatePrompt: 'Please enter the sowing date (e.g., 15-3-2026) or type "cancel".',
+    invalidDate: 'The input could not be understood as a date. Please enter a valid date (e.g., 15-3-2026 or March 15th) or type "cancel".',
     sowingDateSet: 'Sowing date set to ${date}.\n\nPlease enter your farm size in acres (e.g., 2.5) or type "cancel".',
     enterFarmSize: 'Please enter your farm size in acres (e.g., 2.5) or type "cancel".',
     invalidNumber: 'The input does not appear to be a valid number. Please enter farm size in acres (e.g., 2.5) or type "cancel".',
@@ -104,6 +105,14 @@ const messages: Record<SupportedLanguages, Record<string, string>> = {
     cropPlanAnalysis: 'Crop Plan Analysis\n\n${analysis}',
     cropPlanIncomplete: 'Crop plan saved but some details are missing. Please create a new one from the main menu.',
     createCropPlan: 'Let us create your crop plan.\n\nPlease enter the crop name (e.g., Wheat, Rice, Cotton).\n\nOr type "cancel" at any time to abort.',
+    mandiSelectCommodity: 'Please select a commodity to get mandi prices.\nType "cancel" to go back to the main menu.',
+    mandiSelectButton: 'View Commodities',
+    mandiSectionTitle: 'Commodities',
+    mandiMoreOption: 'More →',
+    mandiNoMore: 'No more commodities available.\nPlease select from the list above, or type "cancel" to go back.',
+    mandiCancelled: 'Mandi prices check has been cancelled.',
+    mandiAnalysing: 'Fetching mandi prices for ${product}, please wait...',
+    mandiAnalysisResult: 'Mandi Price Analysis\n\n${analysis}',
   },
   [SupportedLanguages.HINDI]: {
     cropCreationCancelled: 'फसल निर्माण रद्द कर दिया गया है।',
@@ -112,9 +121,9 @@ const messages: Record<SupportedLanguages, Record<string, string>> = {
     selectNewLanguage: 'Please select your new language / नई भाषा चुनें / नवीन भाषा निवडा.',
     enterCropName: 'कृपया फसल का नाम दर्ज करें (उदाहरण के लिए, गेहूं, चावल) या "cancel" टाइप करके निरस्त करें।',
     errorTryAgain: 'एक त्रुटि हुई। कृपया मुख्य मेनू से फिर से प्रयास करें।',
-    enterSowingDate: 'कृपया बोवनी की तारीख दर्ज करें।\nउदाहरण: "March 15", "15/03/2026", "2026-03-15"\n\nया "cancel" टाइप करके निरस्त करें।',
-    enterSowingDatePrompt: 'कृपया बोवनी की तारीख दर्ज करें (उदाहरण, 2026-03-15) या "cancel" टाइप करें।',
-    invalidDate: 'इनपुट को तारीख के रूप में समझा नहीं जा सका। कृपया एक वैध तारीख दर्ज करें (उदाहरण, 2026-03-15 या March 15th) या "cancel" टाइप करें।',
+    enterSowingDate: 'कृपया बोवनी की तारीख दर्ज करें।\nउदाहरण: "March 15", "15/03/2026", "15-3-2026"\n\nया "cancel" टाइप करके निरस्त करें।',
+    enterSowingDatePrompt: 'कृपया बोवनी की तारीख दर्ज करें (उदाहरण, 15-3-2026) या "cancel" टाइप करें।',
+    invalidDate: 'इनपुट को तारीख के रूप में समझा नहीं जा सका। कृपया एक वैध तारीख दर्ज करें (उदाहरण, 15-3-2026 या March 15th) या "cancel" टाइप करें।',
     sowingDateSet: 'बोवनी की तारीख ${date} पर सेट की गई।\n\nकृपया अपने खेत का आकार एकड़ में दर्ज करें (उदाहरण, 2.5) या "cancel" टाइप करें।',
     enterFarmSize: 'कृपया अपने खेत का आकार एकड़ में दर्ज करें (उदाहरण, 2.5) या "cancel" टाइप करें।',
     invalidNumber: 'इनपुट एक वैध संख्या नहीं प्रतीत होता। कृपया खेत का आकार एकड़ में दर्ज करें (उदाहरण, 2.5) या "cancel" टाइप करें।',
@@ -125,6 +134,14 @@ const messages: Record<SupportedLanguages, Record<string, string>> = {
     cropPlanAnalysis: 'फसल योजना विश्लेषण\n\n${analysis}',
     cropPlanIncomplete: 'फसल योजना सहेजी गई लेकिन कुछ विवरण गायब हैं। कृपया मुख्य मेनू से एक नई बनाएं।',
     createCropPlan: 'आइए आपकी फसल योजना बनाएं।\n\nकृपया फसल का नाम दर्ज करें (उदाहरण, गेहूं, चावल, कपास)।\n\nया किसी भी समय "cancel" टाइप करके निरस्त करें।',
+    mandiSelectCommodity: 'मंडी भाव देखने के लिए कृपया एक वस्तु चुनें।\nमुख्य मेनू पर वापस जाने के लिए "cancel" टाइप करें।',
+    mandiSelectButton: 'वस्तुएं देखें',
+    mandiSectionTitle: 'वस्तुएं',
+    mandiMoreOption: 'और देखें →',
+    mandiNoMore: 'कोई और वस्तु उपलब्ध नहीं है।\nऊपर दी गई सूची से चुनें, या "cancel" टाइप करके वापस जाएं।',
+    mandiCancelled: 'मंडी भाव जांच रद्द कर दी गई है।',
+    mandiAnalysing: '${product} के लिए मंडी भाव प्राप्त किए जा रहे हैं, कृपया प्रतीक्षा करें...',
+    mandiAnalysisResult: 'मंडी भाव विश्लेषण\n\n${analysis}',
   },
   [SupportedLanguages.MARATHI]: {
     cropCreationCancelled: 'पीक निर्मिती रद्द करण्यात आली आहे.',
@@ -133,9 +150,9 @@ const messages: Record<SupportedLanguages, Record<string, string>> = {
     selectNewLanguage: 'Please select your new language / नई भाषा चुनें / नवीन भाषा निवडा.',
     enterCropName: 'कृपया पीकाचे नाव प्रविष्ट करा (उदाहरणार्थ, गहू, तांदूळ) किंवा "cancel" टाइप करून रद्द करा.',
     errorTryAgain: 'एक त्रुटी आली. कृपया मुख्य मेनूमधून पुन्हा प्रयत्न करा.',
-    enterSowingDate: 'कृपया पेरणीची तारीख प्रविष्ट करा.\nउदाहरणे: "March 15", "15/03/2026", "2026-03-15"\n\nकिंवा "cancel" टाइप करून रद्द करा.',
-    enterSowingDatePrompt: 'कृपया पेरणीची तारीख प्रविष्ट करा (उदाहरण, 2026-03-15) किंवा "cancel" टाइप करा.',
-    invalidDate: 'इनपुटला तारीख म्हणून समजले नाही. कृपया वैध तारीख प्रविष्ट करा (उदाहरण, 2026-03-15 किंवा March 15th) किंवा "cancel" टाइप करा.',
+    enterSowingDate: 'कृपया पेरणीची तारीख प्रविष्ट करा.\nउदाहरणे: "March 15", "15/03/2026", "15-3-2026"\n\nकिंवा "cancel" टाइप करून रद्द करा.',
+    enterSowingDatePrompt: 'कृपया पेरणीची तारीख प्रविष्ट करा (उदाहरण, 15-3-2026) किंवा "cancel" टाइप करा.',
+    invalidDate: 'इनपुटला तारीख म्हणून समजले नाही. कृपया वैध तारीख प्रविष्ट करा (उदाहरण, 15-3-2026 किंवा March 15th) किंवा "cancel" टाइप करा.',
     sowingDateSet: 'पेरणीची तारीख ${date} वर सेट केली.\n\nकृपया तुमच्या शेताचा आकार एकरमध्ये प्रविष्ट करा (उदाहरण, 2.5) किंवा "cancel" टाइप करा.',
     enterFarmSize: 'कृपया तुमच्या शेताचा आकार एकरमध्ये प्रविष्ट करा (उदाहरण, 2.5) किंवा "cancel" टाइप करा.',
     invalidNumber: 'इनपुट वैध संख्या दिसत नाही. कृपया शेताचा आकार एकरमध्ये प्रविष्ट करा (उदाहरण, 2.5) किंवा "cancel" टाइप करा.',
@@ -146,6 +163,14 @@ const messages: Record<SupportedLanguages, Record<string, string>> = {
     cropPlanAnalysis: 'पीक योजना विश्लेषण\n\n${analysis}',
     cropPlanIncomplete: 'पीक योजना जतन झाली परंतु काही तपशील गहाळ आहेत. कृपया मुख्य मेनूमधून एक नवीन तयार करा.',
     createCropPlan: 'चला तुमची पीक योजना तयार करूया.\n\nकृपया पीकाचे नाव प्रविष्ट करा (उदाहरणार्थ, गहू, तांदूळ, कापूस).\n\nकिंवा कोणत्याही वेळी "cancel" टाइप करून रद्द करा.',
+    mandiSelectCommodity: 'मंडी भाव पाहण्यासाठी कृपया एक वस्तू निवडा.\nमुख्य मेनूवर परत जाण्यासाठी "cancel" टाइप करा.',
+    mandiSelectButton: 'वस्तू पहा',
+    mandiSectionTitle: 'वस्तू',
+    mandiMoreOption: 'आणखी पहा →',
+    mandiNoMore: 'आणखी वस्तू उपलब्ध नाहीत.\nवरील यादीतून निवडा, किंवा "cancel" टाइप करून परत जा.',
+    mandiCancelled: 'मंडी भाव तपासणी रद्द करण्यात आली आहे.',
+    mandiAnalysing: '${product} साठी मंडी भाव मिळवले जात आहेत, कृपया थांबा...',
+    mandiAnalysisResult: 'मंडी भाव विश्लेषण\n\n${analysis}',
   },
 };
 
@@ -181,6 +206,7 @@ async function parseDateWithGemini(userText: string): Promise<Date | null> {
               todays date is ${todaysDate}
               The user sent this text: "${userText}"\n` +
               `The date should be more than 5 months in the past.\n` +
+              `shouldnt be more than 5 months in the future\n` +
               `If it contains a valid date, reply with ONLY the ISO-8601 date string (YYYY-MM-DD) and nothing else.\n` +
               `If it does NOT contain a valid date (e.g. random words, nonsense), reply with only the single word: null`,
           },
@@ -217,6 +243,60 @@ async function cancelCropPlan(user: any, phone: string) {
   const lang: SupportedLanguages = user.language ?? SupportedLanguages.ENGLISH;
   await sendTextMessage(phone, messages[lang].cropCreationCancelled);
   await sendMainMenu(phone, lang);
+}
+
+/** Cancel an in-progress mandi selection and return to IDLE */
+async function cancelMandi(user: any, phone: string) {
+  user.botState = BotState.IDLE;
+  await user.save();
+  const lang: SupportedLanguages = user.language ?? SupportedLanguages.ENGLISH;
+  await sendTextMessage(phone, messages[lang].mandiCancelled);
+  await sendMainMenu(phone, lang);
+}
+
+/**
+ * Fetch mandi products for the given page and send them as a WhatsApp interactive
+ * list. Each row id is encoded as:  <productName>;<page>;<productId>
+ * The 10th slot (when the list is full, i.e. 9 items) is a "More →" option with
+ * id:  more;<nextPage>
+ * When the API returns fewer than 9 items there is nothing more to paginate, so
+ * no "More" row is appended and a note is shown in the body text.
+ */
+async function sendMandiProductList(
+  phone: string,
+  user: any,
+  page: number
+) {
+  const lang: SupportedLanguages = user.language ?? SupportedLanguages.ENGLISH;
+  const location: GeoLocation = user.location ?? { latitude: 0, longitude: 0 };
+
+  const products = await getMandiProductsForUser(location, lang, page);
+  const isLastPage = products.length < 9;
+
+  const rows: { id: string; title: string }[] = products.map((p) => ({
+    // encode: <name>;<page>;<apiId>
+    id: `${p.name};${page};${p.id}`,
+    title: p.name.charAt(0).toUpperCase() + p.name.slice(1),
+  }));
+
+  if (!isLastPage) {
+    rows.push({
+      id: `more;${page + 1}`,
+      title: messages[lang].mandiMoreOption,
+    });
+  }
+
+  const bodyText = isLastPage && products.length === 0
+    ? messages[lang].mandiNoMore
+    : messages[lang].mandiSelectCommodity + (isLastPage ? `\n\n${messages[lang].mandiNoMore}` : '');
+
+  await sendInteractiveList(
+    phone,
+    bodyText,
+    messages[lang].mandiSelectButton,
+    messages[lang].mandiSectionTitle,
+    rows
+  );
 }
 
 // ─── Express app ──────────────────────────────────────────────────────────────
@@ -294,6 +374,12 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
     const buttonId: string | null =
       msgType === 'interactive' && value.messages[0].interactive?.type === 'button_reply'
         ? value.messages[0].interactive.button_reply.id
+        : null;
+
+    // list_reply comes from WhatsApp interactive list messages
+    const listReplyId: string | null =
+      msgType === 'interactive' && value.messages[0].interactive?.type === 'list_reply'
+        ? value.messages[0].interactive.list_reply.id
         : null;
 
     const textBody: string | null =
@@ -603,7 +689,76 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
       return;
     }
 
+    // ── State: AWAITING_MANDI_SELECTION ──────────────────────────────────────
+    if (user.botState === BotState.AWAITING_MANDI_SELECTION) {
+      // Cancel via text
+      if (textBody?.toLowerCase() === 'cancel') {
+        await cancelMandi(user, farmerPhoneNumber);
+        res.sendStatus(200);
+        return;
+      }
+
+      // The only valid input here is a list_reply
+      if (!listReplyId) {
+        // Re-send the current page (page 1 as fallback)
+        await sendMandiProductList(farmerPhoneNumber, user, 1);
+        res.sendStatus(200);
+        return;
+      }
+
+      // ── "More" pagination: id = "more;<nextPage>" ──────────────────────────
+      if (listReplyId.startsWith('more;')) {
+        const nextPage = parseInt(listReplyId.split(';')[1], 10);
+        await sendMandiProductList(farmerPhoneNumber, user, nextPage);
+        res.sendStatus(200);
+        return;
+      }
+
+      // ── Commodity selected: id = "<name>;<page>;<apiId>" ──────────────────
+      const parts = listReplyId.split(';');
+      if (parts.length === 3) {
+        const [productName, , productId] = parts;
+        const capitalised = productName.charAt(0).toUpperCase() + productName.slice(1);
+        await sendTextMessage(
+          farmerPhoneNumber,
+          messages[lang].mandiAnalysing.replace('${product}', capitalised)
+        );
+        const location: GeoLocation =
+          user.location ?? { latitude: 0, longitude: 0 };
+        const analysis = await getMandiAnalysisForProduct(location, lang, productId);
+        await sendTextMessage(
+          farmerPhoneNumber,
+          messages[lang].mandiAnalysisResult.replace('${analysis}', analysis)
+        );
+        user.botState = BotState.IDLE;
+        await user.save();
+        await sendMainMenu(farmerPhoneNumber, lang);
+        res.sendStatus(200);
+        return;
+      }
+
+      // Unexpected format — re-send list
+      await sendMandiProductList(farmerPhoneNumber, user, 1);
+      res.sendStatus(200);
+      return;
+    }
+
     // ── State: IDLE (and fallback) ─────────────────────────────────────────────
+    if (buttonId === 'menu_mandi') {
+      if (!user.location) {
+        await sendTextMessage(farmerPhoneNumber, locationRequestMessage[lang]);
+        user.botState = BotState.AWAITING_LOCATION;
+        await user.save();
+        res.sendStatus(200);
+        return;
+      }
+      user.botState = BotState.AWAITING_MANDI_SELECTION;
+      await user.save();
+      await sendMandiProductList(farmerPhoneNumber, user, 1);
+      res.sendStatus(200);
+      return;
+    }
+
     if (buttonId === 'menu_update_details') {
       user.botState = BotState.AWAITING_UPDATE_CHOICE;
       await user.save();
