@@ -1,6 +1,8 @@
 from datetime import datetime
+import os
 from typing import Optional
 
+import requests as _requests
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -16,24 +18,15 @@ router = APIRouter()
 @router.get("/best-rates")
 async def best_rates(
     commodity: str = Query(..., description="Crop name, e.g. 'Wheat'"),
-    state: Optional[str] = Query(None),
-    district: Optional[str] = Query(None),
-    variety: Optional[str] = Query(None),
     latitude: Optional[float] = Query(None, description="Farmer's latitude"),
     longitude: Optional[float] = Query(None, description="Farmer's longitude"),
     radius_km: int = Query(100, description="Search radius in km"),
 ) -> dict:
     """Get best mandi rates for a commodity with 7-day average pricing."""
     location_filter = {}
-    if state:
-        location_filter["state"] = state
-    if district:
-        location_filter["district"] = district
-
+    # Oepncage to be used to get state and district
     prices = service.get_commodity_prices(commodity, location_filter)
 
-    if variety:
-        prices = [p for p in prices if variety.lower() in (p.get("variety") or "").lower()]
 
     prices = service.get_7day_average_prices(prices)
 
@@ -103,23 +96,88 @@ async def compare_commodities(body: CompareRequest) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Helper: OpenCage reverse geocoding  (lat, lon → state, district)
+# ---------------------------------------------------------------------------
+
+def _reverse_geocode(lat: float, lon: float) -> dict:
+    """
+    Convert GPS coordinates to an Indian state + district using the OpenCage
+    Geocoding API (https://opencagedata.com/).
+
+    Returns a dict with 'state' and 'district' keys (strings or None).
+    Raises HTTPException 502 if the API call fails.
+    """
+    api_key = os.getenv("OPENGATE_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENGATE_API_KEY is not configured.")
+
+    try:
+        resp = _requests.get(
+            "https://api.opencagedata.com/geocode/v1/json",
+            params={
+                "q": f"{lat},{lon}",
+                "key": api_key,
+                "no_annotations": 1,
+                "language": "en",
+                "countrycode": "in",   # restrict to India
+            },
+            timeout=8,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Reverse geocoding failed: {exc}") from exc
+
+    results = data.get("results", [])
+    if not results:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No location found for coordinates ({lat}, {lon}).",
+        )
+
+    components = results[0].get("components", {})
+    # OpenCage returns state as 'state', district is usually 'county' or 'state_district'
+    state    = components.get("state") or components.get("state_code")
+    district = (
+        components.get("county")
+        or components.get("state_district")
+        or components.get("city_district")
+        or components.get("city")
+    )
+    return {"state": state, "district": district}
+
+
+# ---------------------------------------------------------------------------
 # GET /mandi/commodities
 # ---------------------------------------------------------------------------
 
 @router.get("/commodities")
 async def get_commodities(
-    state: Optional[str] = Query(None),
-    district: Optional[str] = Query(None),
+    latitude: float = Query(..., description="Farmer's latitude"),
+    longitude: float = Query(..., description="Farmer's longitude"),
+    expected_language: Optional[str] = Query("English"),
 ) -> dict:
-    """List available commodities, optionally filtered by location."""
-    filters = {}
+    """List available commodities for the farmer's location, translated into the expected language."""
+    geo = _reverse_geocode(latitude, longitude)
+    state    = geo["state"]
+    district = geo["district"]
+
+    filters: dict = {}
     if state:
         filters["state"] = state
     if district:
         filters["district"] = district
 
     commodities = service.get_commodities(filters)
-    return {"success": True, "commodities": commodities, "total": len(commodities), "filters": filters}
+    translated  = service.get_commodities_in_expected_language(expected_language or "English", commodities)
+
+    return {
+        "success": True,
+        "location": {"latitude": latitude, "longitude": longitude, "state": state, "district": district},
+        "commodities": translated,
+        "total": len(translated),
+        "filters": filters,
+    }
 
 
 # ---------------------------------------------------------------------------

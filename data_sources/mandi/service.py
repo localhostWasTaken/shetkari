@@ -110,6 +110,60 @@ def get_commodities(filters: dict | None = None) -> list[str]:
     records = _fetch({**(filters or {}), "limit": 10000})
     return sorted({r.get("commodity") for r in records if r.get("commodity")})
 
+def get_commodities_in_expected_language(language: str, commodities: list[str]) -> list[dict]:
+    """
+    Translate a list of commodity names into the expected language using Gemini.
+
+    Returns a list of dicts: [{"id": "Wheat", "name": "गेहूं"}, ...]
+    Falls back to [{"id": c, "name": c}] on any error.
+    """
+    import os
+    from pydantic import BaseModel
+    from google import genai
+    from google.genai import types
+
+    # If language is English or missing, skip the Gemini call
+    if not language or language.lower() == "english":
+        return [{"id": c, "name": c} for c in commodities]
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    if not api_key:
+        logger.warning("GEMINI_API_KEY not set — returning untranslated commodities.")
+        return [{"id": c, "name": c} for c in commodities]
+
+    # Pydantic models for structured output
+    class TranslatedCommodity(BaseModel):
+        id: str    # original English commodity name
+        name: str  # translated name in target language
+
+    class TranslatedCommoditiesList(BaseModel):
+        commodities: list[TranslatedCommodity]
+
+    client = genai.Client(api_key=api_key)
+
+    prompt = (
+        f"Translate the following commodity/crop names into {language}. "
+        f"Use the native script of {language}. "
+        f"Return each commodity as an object with 'id' (the original English name, exactly as given) "
+        f"and 'name' (the properly translated name).\n\n"
+        f"Commodities: {commodities}"
+    )
+
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_json_schema=TranslatedCommoditiesList.model_json_schema(),
+            ),
+        )
+        result = TranslatedCommoditiesList.model_validate_json(response.text)
+        return [item.model_dump() for item in result.commodities]
+    except Exception as e:
+        logger.error("Gemini commodity translation failed: %s", e)
+        return [{"id": c, "name": c} for c in commodities]
 
 def get_latest_prices(prices: list[dict]) -> list[dict]:
     """Keep only the most recent record per (market, commodity, variety) combination."""
