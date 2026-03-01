@@ -23,9 +23,9 @@ async def best_rates(
     radius_km: int = Query(100, description="Search radius in km"),
 ) -> dict:
     """Get best mandi rates for a commodity with 7-day average pricing."""
-    # TODO: OpenCage not working — hardcoded to Maharashtra/Thane until fixed
-    state:    Optional[str] = "Maharashtra"
-    district: Optional[str] = "Thane"
+    # TODO: OpenCage not working — hardcoded to Punjab/Kapurthala until fixed
+    state:    Optional[str] = "Punjab"
+    district: Optional[str] = "Kapurthala"
     location_filter: dict = {"state": state, "district": district}
 
     prices = service.get_commodity_prices(commodity, location_filter)
@@ -159,9 +159,9 @@ async def get_commodities(
     expected_language: Optional[str] = Query("English"),
 ) -> dict:
     """List available commodities for the farmer's location, translated into the expected language."""
-    # TODO: OpenCage not working — hardcoded to Maharashtra/Thane until fixed
-    state:    str = "Maharashtra"
-    district: str = "Thane"
+    # TODO: OpenCage not working — hardcoded to Punjab/Kapurthala until fixed
+    state:    str = "Punjab"
+    district: str = "Kapurthala"
     filters: dict = {"state": state, "district": district}
 
     commodities = service.get_commodities(filters)

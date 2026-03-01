@@ -79,19 +79,24 @@ interface BestRatesResponse {
   total_markets_analyzed: number;
 }
 
+const AI_ANALYST_BASE_URL = process.env.AI_ANALYST_BASE_URL ?? "http://127.0.0.1:8000";
+
 /**
- * Fetch best mandi rates for a commodity at the farmer's location and return
- * a formatted, human-readable analysis string suitable for WhatsApp.
+ * Fetch best mandi rates for a commodity at the farmer's location, then pass
+ * the raw data to the AI analyst service which generates a concise, multilingual
+ * advisory via Gemini.
  *
- * @param location  Farmer's GPS coordinates (forwarded to OpenCage + nearby sort).
- * @param language  Currently unused — prices are numbers so no translation needed.
- * @param productId The original English commodity name (the `id` from ProductFromMandi).
+ * @param location   Farmer's GPS coordinates.
+ * @param language   Farmer's preferred language (passed to Gemini for translation).
+ * @param productId  Original English commodity name (the `id` from ProductFromMandi).
+ * @returns          AI-generated advisory string in the farmer's language.
  */
 async function getMandiAnalysisForProduct(
   location: GeoLocation,
   language: SupportedLanguages,
   productId: string,
 ): Promise<string> {
+  // Step 1: fetch raw best-rates data from data_sources
   const params = new URLSearchParams({
     commodity: productId,
     latitude: String(location.latitude),
@@ -99,58 +104,42 @@ async function getMandiAnalysisForProduct(
     radius_km: "150",
   });
 
-  const res = await fetch(`${DATA_SOURCES_BASE_URL}/mandi/best-rates?${params}`);
+  const priceRes = await fetch(`${DATA_SOURCES_BASE_URL}/mandi/best-rates?${params}`);
 
-  if (res.status === 404) {
+  if (priceRes.status === 404) {
     return `No mandi price data found for *${productId}* near your location.`;
   }
-  if (!res.ok) {
-    throw new Error(`data_sources /mandi/best-rates → ${res.status} ${res.statusText}`);
+  if (!priceRes.ok) {
+    throw new Error(`data_sources /mandi/best-rates → ${priceRes.status} ${priceRes.statusText}`);
   }
 
-  const data: BestRatesResponse = await res.json();
-  const lines: string[] = [];
+  const data: BestRatesResponse = await priceRes.json();
 
-  // Header
-  lines.push(`📊 *Mandi Rates: ${data.commodity}*`);
-  if (data.location.district || data.location.state) {
-    lines.push(`📍 ${[data.location.district, data.location.state].filter(Boolean).join(", ")}`);
-  }
-  lines.push("");
+  // Step 2: send raw data + language to the AI analyst for multilingual advisory
+  const aiPayload = {
+    commodity: data.commodity,
+    state: data.location.state,
+    district: data.location.district,
+    best_mandi: data.best_mandi ?? null,
+    top_markets: data.top_markets.slice(0, 5),
+    statistics: data.statistics ?? null,
+    recommendations: data.recommendations,
+    total_markets_analyzed: data.total_markets_analyzed,
+    expected_language: LANGUAGE_NAME[language] ?? "English",
+  };
 
-  // Best mandi
-  if (data.best_mandi) {
-    const b = data.best_mandi;
-    const dist = b.distance_km != null ? ` (${b.distance_km.toFixed(0)} km away)` : "";
-    lines.push(`🏆 *Best Mandi:* ${b.market}, ${b.district}${dist}`);
-    lines.push(`   ₹${b.modal_price.toFixed(0)} / quintal`);
-    lines.push("");
-  }
+  const aiRes = await fetch(`${AI_ANALYST_BASE_URL}/api/v1/mandi-analysis`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(aiPayload),
+  });
 
-  // Top markets (up to 3)
-  if (data.top_markets?.length) {
-    lines.push("📈 *Nearby Markets:*");
-    data.top_markets.slice(0, 3).forEach((m, i) => {
-      const dist = m.distance_km != null ? ` · ${m.distance_km.toFixed(0)} km` : "";
-      lines.push(`${i + 1}. ${m.market} — ₹${m.modal_price.toFixed(0)}${dist}`);
-    });
-    lines.push("");
+  if (!aiRes.ok) {
+    throw new Error(`ai_analyst /api/v1/mandi-analysis → ${aiRes.status} ${aiRes.statusText}`);
   }
 
-  // Price stats
-  const s = data.statistics;
-  if (s) {
-    lines.push(`📉 Low ₹${s.lowest_price.toFixed(0)}  |  📈 High ₹${s.highest_price.toFixed(0)}  |  Avg ₹${s.average_price.toFixed(0)}`);
-    lines.push("");
-  }
-
-  // Recommendations
-  if (data.recommendations?.length) {
-    lines.push("💡 *Tips:*");
-    data.recommendations.slice(0, 2).forEach((r) => lines.push(`• ${r}`));
-  }
-
-  return lines.join("\n");
+  const aiData = await aiRes.json() as { advisory: string };
+  return aiData.advisory;
 }
 
 export { getMandiProductsForUser, getMandiAnalysisForProduct };

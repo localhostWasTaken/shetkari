@@ -1,12 +1,12 @@
 """
 AI Farm Analyst — API Entry Point
 ==============================
-Exposes a FastAPI endpoint to generate farm advisory reports.
+Exposes FastAPI endpoints to generate farm advisory reports.
 """
 
 from fastapi import FastAPI
-from pydantic import BaseModel
 from analyst.engine import analyse
+from analyst.mandi_engine import MandiAnalysisRequest, analyse_mandi
 from models.inputs import AnalyseRequest
 
 app = FastAPI(
@@ -14,6 +14,7 @@ app = FastAPI(
     description="Generates multilingual farm advisory reports using Google Gemini.",
     version="1.0.0",
 )
+
 
 @app.post("/api/v1/analyse")
 def process_analysis(request: AnalyseRequest):
@@ -27,8 +28,17 @@ def process_analysis(request: AnalyseRequest):
         crop=request.crop,
         expected_language=request.expected_language,
     )
-    
     return report
+
+
+@app.post("/api/v1/mandi-analysis")
+def mandi_analysis(request: MandiAnalysisRequest):
+    """
+    Generate a concise, multilingual mandi price advisory using Gemini.
+    Returns plain text suitable for WhatsApp delivery.
+    """
+    return {"advisory": analyse_mandi(request)}
+
 
 if __name__ == "__main__":
     import uvicorn
