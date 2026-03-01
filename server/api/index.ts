@@ -3,7 +3,7 @@ import cors from 'cors';
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import ApiResponse from './models/apiResponse';
-import { sendListMenu, sendTextMessage, sendInteractiveList, uploadAudioToWhatsApp, sendAudioMessage } from './utils/whatsapp';
+import { sendListMenu, sendTextMessage, sendLongTextMessage, sendInteractiveList, uploadAudioToWhatsApp, sendAudioMessage } from './utils/whatsapp';
 import UserModel, { BotState, SupportedLanguages } from './entities/users';
 import CropPlanModel, { isCropPlanIncomplete } from './entities/crop_plan';
 import { cropPlanAnalysis } from './utils/crop_plan_analysis';
@@ -865,9 +865,10 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
         const location: GeoLocation =
           user.location ?? { latitude: 0, longitude: 0 };
         const analysis = await getMandiAnalysisForProduct(location, lang, productId);
-        const mandiResultText = messages[lang].mandiAnalysisResult.replace('${analysis}', analysis);
-        await sendTextMessage(farmerPhoneNumber, mandiResultText);
-        await sendVoiceIfEnabled(farmerPhoneNumber, mandiResultText, lang, user);
+        // Send the AI-generated advisory directly (it already contains its own header).
+        // Use sendLongTextMessage to chunk at paragraph boundaries if > 4000 chars.
+        await sendLongTextMessage(farmerPhoneNumber, analysis);
+        await sendVoiceIfEnabled(farmerPhoneNumber, analysis, lang, user);
         user.botState = BotState.IDLE;
         await user.save();
         await sendMainMenu(farmerPhoneNumber, lang);

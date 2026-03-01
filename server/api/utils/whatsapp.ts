@@ -255,3 +255,48 @@ export async function sendTextMessage(
 
   console.log(`[WhatsApp] Text message sent to ${recipientNumber}`);
 }
+
+const WA_MAX_CHARS = 4000; // WhatsApp API caps at 4096; use 4000 to be safe
+
+/**
+ * Sends a potentially long text message, splitting it into multiple WhatsApp
+ * messages at paragraph boundaries if it exceeds WA_MAX_CHARS.
+ * Use this for AI-generated advisories that may be lengthy.
+ */
+export async function sendLongTextMessage(
+  recipientNumber: string,
+  text: string
+): Promise<void> {
+  if (text.length <= WA_MAX_CHARS) {
+    return sendTextMessage(recipientNumber, text);
+  }
+
+  // Split at double-newlines (paragraph boundaries) to keep context intact
+  const paragraphs = text.split(/\n\n+/);
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const para of paragraphs) {
+    const separator = current ? "\n\n" : "";
+    if ((current + separator + para).length > WA_MAX_CHARS) {
+      if (current) chunks.push(current);
+      // If a single paragraph itself is too long, hard-split it
+      if (para.length > WA_MAX_CHARS) {
+        for (let i = 0; i < para.length; i += WA_MAX_CHARS) {
+          chunks.push(para.slice(i, i + WA_MAX_CHARS));
+        }
+        current = "";
+      } else {
+        current = para;
+      }
+    } else {
+      current = current + separator + para;
+    }
+  }
+  if (current) chunks.push(current);
+
+  console.log(`[WhatsApp] Sending long message in ${chunks.length} chunk(s) to ${recipientNumber}`);
+  for (const chunk of chunks) {
+    await sendTextMessage(recipientNumber, chunk);
+  }
+}
