@@ -67,14 +67,36 @@ async function getMandiProductsForUser(
   return all.slice(startIndex, endIndex); // returns [] when page is out of range
 }
 
-// Shape returned by data_sources GET /mandi/best-rates
+// ─── Actual shape returned by data_sources GET /mandi/best-rates ─────────────
+// Note: comparison.py returns "price" (not "modal_price"), the top markets
+// are under "top_five_markets", and recommendations are rich dicts not strings.
+interface RawMandiMarket {
+  market: string;
+  district: string;
+  state: string;
+  price: number;   // comparison.py uses "price"
+  distance_km?: number;
+}
+
+interface RawRecommendation {
+  type: string;
+  priority: string;
+  market: string;
+  district: string;
+  state: string;
+  price: number;
+  reason: string;
+  distance?: string;
+}
+
 interface BestRatesResponse {
   success: boolean;
   commodity: string;
   location: { latitude: number | null; longitude: number | null; state: string | null; district: string | null };
-  best_mandi: { market: string; district: string; state: string; modal_price: number; distance_km?: number } | null;
-  top_markets: Array<{ market: string; district: string; state: string; modal_price: number; min_price: number; max_price: number; distance_km?: number }>;
-  recommendations: string[];
+  best_mandi: RawMandiMarket | null;
+  top_five_markets: RawMandiMarket[];    // actual key from comparison.py
+  top_markets?: RawMandiMarket[];    // fallback alias
+  recommendations: RawRecommendation[];
   statistics: { average_price: number; highest_price: number; lowest_price: number };
   total_markets_analyzed: number;
 }
@@ -82,14 +104,9 @@ interface BestRatesResponse {
 const AI_ANALYST_BASE_URL = process.env.AI_ANALYST_BASE_URL ?? "http://127.0.0.1:8000";
 
 /**
- * Fetch best mandi rates for a commodity at the farmer's location, then pass
- * the raw data to the AI analyst service which generates a concise, multilingual
- * advisory via Gemini.
- *
- * @param location   Farmer's GPS coordinates.
- * @param language   Farmer's preferred language (passed to Gemini for translation).
- * @param productId  Original English commodity name (the `id` from ProductFromMandi).
- * @returns          AI-generated advisory string in the farmer's language.
+ * Fetch best mandi rates for a commodity at the farmer's location, normalize
+ * the data to match the Pydantic schema, then call the AI analyst to generate
+ * a concise multilingual advisory via Gemini.
  */
 async function getMandiAnalysisForProduct(
   location: GeoLocation,
@@ -115,15 +132,32 @@ async function getMandiAnalysisForProduct(
 
   const data: BestRatesResponse = await priceRes.json();
 
-  // Step 2: send raw data + language to the AI analyst for multilingual advisory
+  // Normalize: map "price" → "modal_price" (MandiMarket Pydantic model expects modal_price)
+  const normMarket = (m: RawMandiMarket) => ({
+    market: m.market,
+    district: m.district,
+    modal_price: m.price,
+    distance_km: m.distance_km ?? null,
+  });
+
+  // comparison.py puts top results under "top_five_markets"
+  const rawTop: RawMandiMarket[] = data.top_five_markets ?? data.top_markets ?? [];
+
+  // recommendations are rich dicts — extract the human-readable "reason" string
+  const recStrings: string[] = (data.recommendations ?? [])
+    .map((r) => (typeof r === "string" ? r : r.reason))
+    .filter(Boolean)
+    .slice(0, 3);
+
+  // Step 2: send normalized payload to ai_analyst for multilingual advisory
   const aiPayload = {
     commodity: data.commodity,
     state: data.location.state,
     district: data.location.district,
-    best_mandi: data.best_mandi ?? null,
-    top_markets: data.top_markets.slice(0, 5),
+    best_mandi: data.best_mandi ? normMarket(data.best_mandi) : null,
+    top_markets: rawTop.slice(0, 5).map(normMarket),
     statistics: data.statistics ?? null,
-    recommendations: data.recommendations,
+    recommendations: recStrings,
     total_markets_analyzed: data.total_markets_analyzed,
     expected_language: LANGUAGE_NAME[language] ?? "English",
   };
@@ -135,7 +169,8 @@ async function getMandiAnalysisForProduct(
   });
 
   if (!aiRes.ok) {
-    throw new Error(`ai_analyst /api/v1/mandi-analysis → ${aiRes.status} ${aiRes.statusText}`);
+    const errBody = await aiRes.text().catch(() => "");
+    throw new Error(`ai_analyst /api/v1/mandi-analysis → ${aiRes.status} ${aiRes.statusText}: ${errBody}`);
   }
 
   const aiData = await aiRes.json() as { advisory: string };
