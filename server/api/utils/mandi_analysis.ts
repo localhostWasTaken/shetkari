@@ -35,11 +35,11 @@ async function getMandiProductsForUser(location: GeoLocation, language: Supporte
   }
 }
 
-async function getMandiAnalysisForProduct(location: GeoLocation, language: SupportedLanguages, productName: string): Promise<string> {
+async function getMandiAnalysisForProduct(location: GeoLocation, language: SupportedLanguages, productId: string): Promise<string> {
   // waiting for anuj to implement this
   // for now, return some dummy data
   await new Promise((resolve) => setTimeout(resolve, 100)); // simulate async delay
-  return `kya re lukkhe "${productName}" ki mandi analysis chahiye? muh me lena padega`;
+  return `kya re lukkhe "${productId}" ki mandi analysis chahiye? muh me lena padega`;
 }
 
 export { getMandiProductsForUser, getMandiAnalysisForProduct };
