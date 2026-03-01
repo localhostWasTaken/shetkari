@@ -180,6 +180,7 @@ async function parseDateWithGemini(userText: string): Promise<Date | null> {
               `You are a date parser. 
               todays date is ${todaysDate}
               The user sent this text: "${userText}"\n` +
+              `The date should be more than 5 months in the past.\n` +
               `If it contains a valid date, reply with ONLY the ISO-8601 date string (YYYY-MM-DD) and nothing else.\n` +
               `If it does NOT contain a valid date (e.g. random words, nonsense), reply with only the single word: null`,
           },
