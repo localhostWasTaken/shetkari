@@ -523,9 +523,9 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
       await sendListMenu(
         farmerPhoneNumber,
         [
-          { id: 'irrigation_rainfed',  title: 'Rainfed'  },
+          { id: 'irrigation_rainfed', title: 'Rainfed' },
           { id: 'irrigation_borewell', title: 'Borewell' },
-          { id: 'irrigation_canal',    title: 'Canal'    },
+          { id: 'irrigation_canal', title: 'Canal' },
         ],
         messages[lang].farmSizeSet.replace('${num}', num.toString())
       );
@@ -552,16 +552,16 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
       }
 
       const irrigationMap: Record<string, string> = {
-        irrigation_rainfed:   'Rainfed',
-        irrigation_borewell:  'Borewell',
-        irrigation_canal:     'Canal',
-        irrigation_drip:      'Drip',
+        irrigation_rainfed: 'Rainfed',
+        irrigation_borewell: 'Borewell',
+        irrigation_canal: 'Canal',
+        irrigation_drip: 'Drip',
         irrigation_sprinkler: 'Sprinkler',
-        rainfed:              'Rainfed',
-        borewell:             'Borewell',
-        canal:                'Canal',
-        drip:                 'Drip',
-        sprinkler:            'Sprinkler',
+        rainfed: 'Rainfed',
+        borewell: 'Borewell',
+        canal: 'Canal',
+        drip: 'Drip',
+        sprinkler: 'Sprinkler',
       };
       const irrigation = irrigationMap[rawInput.toLowerCase()];
       if (!irrigation) {
@@ -587,7 +587,7 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
       // Check completeness, then run analysis
       if (!isCropPlanIncomplete(crop as any)) {
         await sendTextMessage(farmerPhoneNumber, messages[lang].analysingCropPlan);
-        const analysis = await cropPlanAnalysis(crop as any, lang);
+        const analysis = await cropPlanAnalysis(crop as any, user.id, lang);
         await sendTextMessage(farmerPhoneNumber, messages[lang].cropPlanAnalysis.replace('${analysis}', analysis));
       } else {
         await sendTextMessage(

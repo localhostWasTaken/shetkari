@@ -14,6 +14,16 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 from typing import Literal
 
+class AnalyseRequest(BaseModel):
+    """Payload for the /analyse endpoint."""
+    expected_language: str = Field(
+        default="English",
+        description="Language for the final report. The AI should respond in this language and its matching script."
+    )
+    soil: SoilData
+    weather: WeatherData
+    crop: CropPlan
+
 
 class SoilData(BaseModel):
     """Soil health snapshot for the farm."""

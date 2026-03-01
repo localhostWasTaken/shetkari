@@ -35,6 +35,7 @@ def analyse(
     weather: WeatherData,
     crop: CropPlan,
     *,
+    expected_language: str = "English",
     model: str | None = None,
 ) -> AnalystReport:
     """
@@ -45,13 +46,14 @@ def analyse(
     soil:    Soil nutrient and moisture data.
     weather: Current weather + 7-day forecast.
     crop:    The farmer's active crop plan.
+    expected_language: Target language for the report.
     model:   Override the Gemini model name (defaults to settings.GEMINI_MODEL).
 
     Returns
     -------
     AnalystReport — a fully validated Pydantic object.
     """
-    prompt = build_prompt(soil, weather, crop)
+    prompt = build_prompt(soil, weather, crop, expected_language)
 
     response = _client.models.generate_content(
         model=model or GEMINI_MODEL,

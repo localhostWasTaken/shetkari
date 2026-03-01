@@ -99,7 +99,7 @@ def _format_crop(crop: CropPlan) -> str:
 # Public: build the user-turn prompt
 # ---------------------------------------------------------------------------
 
-def build_prompt(soil: SoilData, weather: WeatherData, crop: CropPlan) -> str:
+def build_prompt(soil: SoilData, weather: WeatherData, crop: CropPlan, expected_language: str = "English") -> str:
     """Return the user-turn prompt to send to Gemini."""
     return f"""
 Please generate a complete farm advisory report for the following data.
@@ -114,4 +114,5 @@ Please generate a complete farm advisory report for the following data.
 {_format_crop(crop)}
 
 Analyse all three data sources together and produce the advisory report JSON.
+Crucially, generate the values inside the JSON report entirely in {expected_language}, using the native script/alphabet of {expected_language}. (The JSON keys themselves must remain unchanged, only the content values should be translated).
 """.strip()
