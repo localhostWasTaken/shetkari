@@ -67,46 +67,33 @@ async function getMandiProductsForUser(
   return all.slice(startIndex, endIndex); // returns [] when page is out of range
 }
 
-// ─── Actual shape returned by data_sources GET /mandi/best-rates ─────────────
-// Note: comparison.py returns "price" (not "modal_price"), the top markets
-// are under "top_five_markets", and recommendations are rich dicts not strings.
-interface RawMandiMarket {
-  market: string;
-  district: string;
-  state: string;
-  price: number;   // comparison.py uses "price"
-  distance_km?: number;
-}
-
-interface RawRecommendation {
-  type: string;
-  priority: string;
-  market: string;
-  district: string;
-  state: string;
-  price: number;
-  reason: string;
-  distance?: string;
-}
-
+// ─── Shape returned by data_sources GET /mandi/best-rates ────────────────────
+// We forward the FULL rich response to ai_analyst — no field stripping.
 interface BestRatesResponse {
   success: boolean;
   commodity: string;
-  location: { latitude: number | null; longitude: number | null; state: string | null; district: string | null };
-  best_mandi: RawMandiMarket | null;
-  top_five_markets: RawMandiMarket[];    // actual key from comparison.py
-  top_markets?: RawMandiMarket[];    // fallback alias
-  recommendations: RawRecommendation[];
-  statistics: { average_price: number; highest_price: number; lowest_price: number };
+  location: {
+    latitude: number | null;
+    longitude: number | null;
+    state: string | null;
+    district: string | null;
+  };
+  search_radius: string;
+  calculation_method: string;
+  best_mandi: Record<string, unknown> | null;
+  top_markets: Record<string, unknown>[];
+  top_five_markets?: Record<string, unknown>[];
+  recommendations: Record<string, unknown>[];
+  statistics: Record<string, unknown>;
   total_markets_analyzed: number;
+  timestamp: string;
 }
 
 const AI_ANALYST_BASE_URL = process.env.AI_ANALYST_BASE_URL ?? "http://127.0.0.1:8000";
 
 /**
- * Fetch best mandi rates for a commodity at the farmer's location, normalize
- * the data to match the Pydantic schema, then call the AI analyst to generate
- * a concise multilingual advisory via Gemini.
+ * Fetch best mandi rates for a commodity at the farmer's location, then forward
+ * the FULL rich data to the AI analyst for a detailed multilingual advisory.
  */
 async function getMandiAnalysisForProduct(
   location: GeoLocation,
@@ -132,32 +119,17 @@ async function getMandiAnalysisForProduct(
 
   const data: BestRatesResponse = await priceRes.json();
 
-  // Normalize: map "price" → "modal_price" (MandiMarket Pydantic model expects modal_price)
-  const normMarket = (m: RawMandiMarket) => ({
-    market: m.market,
-    district: m.district,
-    modal_price: m.price,
-    distance_km: m.distance_km ?? null,
-  });
-
-  // comparison.py puts top results under "top_five_markets"
-  const rawTop: RawMandiMarket[] = data.top_five_markets ?? data.top_markets ?? [];
-
-  // recommendations are rich dicts — extract the human-readable "reason" string
-  const recStrings: string[] = (data.recommendations ?? [])
-    .map((r) => (typeof r === "string" ? r : r.reason))
-    .filter(Boolean)
-    .slice(0, 3);
-
-  // Step 2: send normalized payload to ai_analyst for multilingual advisory
+  // Step 2: forward the FULL rich data to ai_analyst — no stripping!
   const aiPayload = {
     commodity: data.commodity,
     state: data.location.state,
     district: data.location.district,
-    best_mandi: data.best_mandi ? normMarket(data.best_mandi) : null,
-    top_markets: rawTop.slice(0, 5).map(normMarket),
+    search_radius: data.search_radius,
+    calculation_method: data.calculation_method,
+    best_mandi: data.best_mandi ?? null,
+    top_markets: (data.top_five_markets ?? data.top_markets ?? []).slice(0, 5),
     statistics: data.statistics ?? null,
-    recommendations: recStrings,
+    recommendations: data.recommendations ?? [],
     total_markets_analyzed: data.total_markets_analyzed,
     expected_language: LANGUAGE_NAME[language] ?? "English",
   };
