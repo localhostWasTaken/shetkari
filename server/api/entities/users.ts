@@ -16,10 +16,12 @@ export enum BotState {
     NEW = "NEW",
     AWAITING_LANGUAGE = "AWAITING_LANGUAGE",
     AWAITING_LOCATION = "AWAITING_LOCATION",
+    AWAITING_VOICE_PREFERENCE = "AWAITING_VOICE_PREFERENCE",
     IDLE = "IDLE",
     AWAITING_UPDATE_CHOICE = "AWAITING_UPDATE_CHOICE",
     AWAITING_NEW_LANGUAGE = "AWAITING_NEW_LANGUAGE",
     AWAITING_NEW_LOCATION = "AWAITING_NEW_LOCATION",
+    AWAITING_NEW_VOICE_PREFERENCE = "AWAITING_NEW_VOICE_PREFERENCE",
     // Crop plan creation states
     AWAITING_CROP_NAME = "AWAITING_CROP_NAME",
     AWAITING_SOWING_DATE = "AWAITING_SOWING_DATE",
@@ -40,6 +42,7 @@ export interface User {
 
     location: Location | null;
     language: SupportedLanguages | null;
+    voiceEnabled: boolean;
     botState: BotState;
 }
 
@@ -64,6 +67,7 @@ const UserSchema = new Schema<UserDocument>(
             enum: Object.values(SupportedLanguages),
             default: null,
         },
+        voiceEnabled: { type: Boolean, default: false },
         botState: {
             type: String,
             enum: Object.values(BotState),

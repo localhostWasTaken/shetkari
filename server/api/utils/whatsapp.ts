@@ -1,4 +1,4 @@
-import FormData from "form-data";
+// form-data kept for legacy reference; audio upload uses native FormData + Blob
 
 interface ListOption {
   id: string;
@@ -64,11 +64,15 @@ export async function uploadAudioToWhatsApp(
 
   const url = `https://graph.facebook.com/v25.0/${WHATSAPP_PHONE_NUMBER_ID}/media`;
 
+  // Copy the Buffer into a plain ArrayBuffer so it satisfies the Blob constructor's
+  // BlobPart type (Buffer.buffer can be a SharedArrayBuffer which Blob rejects).
+  const arrayBuf = audioBuffer.buffer.slice(
+    audioBuffer.byteOffset,
+    audioBuffer.byteOffset + audioBuffer.byteLength
+  ) as ArrayBuffer;
+  const blob = new Blob([arrayBuf], { type: mimeType });
   const formData = new FormData();
-  formData.append("file", audioBuffer, {
-    filename: "audio.mp3",
-    contentType: mimeType,
-  });
+  formData.append("file", blob, "audio.mp3");
   formData.append("type", mimeType);
   formData.append("messaging_product", "whatsapp");
 
@@ -76,9 +80,9 @@ export async function uploadAudioToWhatsApp(
     method: "POST",
     headers: {
       Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
-      ...formData.getHeaders(),
+      // Do NOT set Content-Type manually — fetch sets it with the boundary automatically
     },
-    body: formData as any,
+    body: formData,
   });
 
   const data = (await response.json()) as { id?: string };

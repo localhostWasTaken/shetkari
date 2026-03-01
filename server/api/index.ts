@@ -3,11 +3,12 @@ import cors from 'cors';
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import ApiResponse from './models/apiResponse';
-import { sendListMenu, sendTextMessage, sendInteractiveList } from './utils/whatsapp';
+import { sendListMenu, sendTextMessage, sendInteractiveList, uploadAudioToWhatsApp, sendAudioMessage } from './utils/whatsapp';
 import UserModel, { BotState, SupportedLanguages } from './entities/users';
 import CropPlanModel, { isCropPlanIncomplete } from './entities/crop_plan';
 import { cropPlanAnalysis } from './utils/crop_plan_analysis';
 import { getMandiProductsForUser, getMandiAnalysisForProduct, GeoLocation } from './utils/mandi_analysis';
+import { textToSpeech } from './utils/elevenlabs';
 import { randomUUID } from 'node:crypto';
 
 // ─── Static message tables ────────────────────────────────────────────────────
@@ -34,14 +35,17 @@ const updateChoiceOptions: Record<SupportedLanguages, { id: string; title: strin
   [SupportedLanguages.ENGLISH]: [
     { id: "update_language", title: "Language" },
     { id: "update_location", title: "Location" },
+    { id: "update_voice",    title: "Voice Analysis" },
   ],
   [SupportedLanguages.HINDI]: [
     { id: "update_language", title: "भाषा" },
     { id: "update_location", title: "लोकेशन" },
+    { id: "update_voice",    title: "आवाज़ विश्लेषण" },
   ],
   [SupportedLanguages.MARATHI]: [
     { id: "update_language", title: "भाषा" },
     { id: "update_location", title: "स्थान" },
+    { id: "update_voice",    title: "आवाज विश्लेषण" },
   ],
 };
 
@@ -55,6 +59,41 @@ const locationUpdatedMessage: Record<SupportedLanguages, string> = {
   [SupportedLanguages.ENGLISH]: "Your location has been updated successfully.",
   [SupportedLanguages.HINDI]: "आपकी लोकेशन सफलतापूर्वक अपडेट हो गई है।",
   [SupportedLanguages.MARATHI]: "तुमचे स्थान यशस्वीरित्या अपडेट झाले आहे.",
+};
+
+// ─── Voice preference messages ────────────────────────────────────────────────
+
+const voicePreferenceMessage: Record<SupportedLanguages, string> = {
+  [SupportedLanguages.ENGLISH]: "Would you like to receive voice analysis along with text results for Mandi prices and Crop plans?\n\nSelect *Yes* to get audio summaries, or *No* for text only.",
+  [SupportedLanguages.HINDI]: "क्या आप मंडी भाव और फसल योजना के परिणामों के साथ आवाज़ विश्लेषण भी प्राप्त करना चाहते हैं?\n\nऑडियो सारांश के लिए *हाँ* चुनें, या केवल टेक्स्ट के लिए *नहीं* चुनें।",
+  [SupportedLanguages.MARATHI]: "तुम्हाला मंडी भाव आणि पीक योजना निकालांसोबत आवाज विश्लेषण हवे आहे का?\n\nऑडिओ सारांशासाठी *होय* निवडा, किंवा केवल मजकुरासाठी *नाही* निवडा.",
+};
+
+const voicePreferenceOptions: Record<SupportedLanguages, { id: string; title: string }[]> = {
+  [SupportedLanguages.ENGLISH]: [
+    { id: "voice_yes", title: "Yes, I want voice 🔊" },
+    { id: "voice_no",  title: "No, text only 📝" },
+  ],
+  [SupportedLanguages.HINDI]: [
+    { id: "voice_yes", title: "हाँ, आवाज़ चाहिए 🔊" },
+    { id: "voice_no",  title: "नहीं, केवल टेक्स्ट 📝" },
+  ],
+  [SupportedLanguages.MARATHI]: [
+    { id: "voice_yes", title: "होय, आवाज हवी 🔊" },
+    { id: "voice_no",  title: "नाही, फक्त मजकूर 📝" },
+  ],
+};
+
+const voiceEnabledMessage: Record<SupportedLanguages, string> = {
+  [SupportedLanguages.ENGLISH]: "🔊 Voice analysis has been enabled. You will receive audio summaries for Mandi prices and Crop plans.",
+  [SupportedLanguages.HINDI]: "🔊 आवाज़ विश्लेषण सक्षम किया गया है। आपको मंडी भाव और फसल योजना के लिए ऑडियो सारांश मिलेगा।",
+  [SupportedLanguages.MARATHI]: "🔊 आवाज विश्लेषण सक्षम केले आहे. तुम्हाला मंडी भाव आणि पीक योजनेसाठी ऑडिओ सारांश मिळेल.",
+};
+
+const voiceDisabledMessage: Record<SupportedLanguages, string> = {
+  [SupportedLanguages.ENGLISH]: "📝 Voice analysis has been disabled. You will receive text results only.",
+  [SupportedLanguages.HINDI]: "📝 आवाज़ विश्लेषण अक्षम किया गया है। आपको केवल टेक्स्ट परिणाम मिलेंगे।",
+  [SupportedLanguages.MARATHI]: "📝 आवाज विश्लेषण अक्षम केले आहे. तुम्हाला फक्त मजकूर निकाल मिळतील.",
 };
 
 const mainMenu: Record<SupportedLanguages, { body: string; options: { id: string; title: string }[] }> = {
@@ -98,9 +137,11 @@ const messages: Record<SupportedLanguages, Record<string, string>> = {
     sowingDateSet: 'Sowing date set to ${date}.\n\nPlease enter your farm size in acres (e.g., 2.5) or type "cancel".',
     enterFarmSize: 'Please enter your farm size in acres (e.g., 2.5) or type "cancel".',
     invalidNumber: 'The input does not appear to be a valid number. Please enter farm size in acres (e.g., 2.5) or type "cancel".',
-    farmSizeSet: 'Farm size set to ${num} acres.\n\nPlease select your irrigation method.\nYou can also type: Rainfed, Borewell, Canal, Drip, or Sprinkler.\n\nOr type "cancel" to abort.',
-    selectIrrigation: 'Please select irrigation method (Rainfed, Borewell, Canal, Drip, Sprinkler) or type "cancel".',
+    farmSizeSet: 'Farm size set to ${num} acres.\n\nPlease select your irrigation method from the list below.\n\nOr type "cancel" to abort.',
+    selectIrrigation: 'Please select your irrigation method or type "cancel".',
     invalidIrrigation: 'Please choose one of: Rainfed, Borewell, Canal, Drip, Sprinkler — or type "cancel".',
+    irrigationSelectButton: 'Select Method',
+    irrigationSectionTitle: 'Irrigation Methods',
     analysingCropPlan: 'Analysing your crop plan, please wait.',
     cropPlanAnalysis: 'Crop Plan Analysis\n\n${analysis}',
     cropPlanIncomplete: 'Crop plan saved but some details are missing. Please create a new one from the main menu.',
@@ -127,9 +168,11 @@ const messages: Record<SupportedLanguages, Record<string, string>> = {
     sowingDateSet: 'बोवनी की तारीख ${date} पर सेट की गई।\n\nकृपया अपने खेत का आकार एकड़ में दर्ज करें (उदाहरण, 2.5) या "cancel" टाइप करें।',
     enterFarmSize: 'कृपया अपने खेत का आकार एकड़ में दर्ज करें (उदाहरण, 2.5) या "cancel" टाइप करें।',
     invalidNumber: 'इनपुट एक वैध संख्या नहीं प्रतीत होता। कृपया खेत का आकार एकड़ में दर्ज करें (उदाहरण, 2.5) या "cancel" टाइप करें।',
-    farmSizeSet: 'खेत का आकार ${num} एकड़ पर सेट किया गया।\n\nकृपया अपनी सिंचाई विधि चुनें।\nआप टाइप भी कर सकते हैं: Rainfed, Borewell, Canal, Drip, or Sprinkler.\n\nया "cancel" टाइप करके निरस्त करें।',
-    selectIrrigation: 'कृपया सिंचाई विधि चुनें (Rainfed, Borewell, Canal, Drip, Sprinkler) या "cancel" टाइप करें।',
-    invalidIrrigation: 'कृपया इनमें से एक चुनें: Rainfed, Borewell, Canal, Drip, Sprinkler — या "cancel" टाइप करें।',
+    farmSizeSet: 'खेत का आकार ${num} एकड़ पर सेट किया गया।\n\nकृपया नीचे दी गई सूची से अपनी सिंचाई विधि चुनें।\n\nया "cancel" टाइप करके निरस्त करें।',
+    selectIrrigation: 'कृपया अपनी सिंचाई विधि चुनें या "cancel" टाइप करें।',
+    invalidIrrigation: 'कृपया इनमें से एक चुनें: वर्षाधारित, बोरवेल, नहर, ड्रिप, छिड़काव — या "cancel" टाइप करें।',
+    irrigationSelectButton: 'विधि चुनें',
+    irrigationSectionTitle: 'सिंचाई विधियाँ',
     analysingCropPlan: 'आपकी फसल योजना का विश्लेषण किया जा रहा है, कृपया प्रतीक्षा करें।',
     cropPlanAnalysis: 'फसल योजना विश्लेषण\n\n${analysis}',
     cropPlanIncomplete: 'फसल योजना सहेजी गई लेकिन कुछ विवरण गायब हैं। कृपया मुख्य मेनू से एक नई बनाएं।',
@@ -156,9 +199,11 @@ const messages: Record<SupportedLanguages, Record<string, string>> = {
     sowingDateSet: 'पेरणीची तारीख ${date} वर सेट केली.\n\nकृपया तुमच्या शेताचा आकार एकरमध्ये प्रविष्ट करा (उदाहरण, 2.5) किंवा "cancel" टाइप करा.',
     enterFarmSize: 'कृपया तुमच्या शेताचा आकार एकरमध्ये प्रविष्ट करा (उदाहरण, 2.5) किंवा "cancel" टाइप करा.',
     invalidNumber: 'इनपुट वैध संख्या दिसत नाही. कृपया शेताचा आकार एकरमध्ये प्रविष्ट करा (उदाहरण, 2.5) किंवा "cancel" टाइप करा.',
-    farmSizeSet: 'शेताचा आकार ${num} एकरवर सेट केला.\n\nकृपया तुमची सिंचन पद्धत निवडा.\nतुम्ही टाइप करू शकता: Rainfed, Borewell, Canal, Drip, किंवा Sprinkler.\n\nकिंवा "cancel" टाइप करून रद्द करा.',
-    selectIrrigation: 'कृपया सिंचन पद्धत निवडा (Rainfed, Borewell, Canal, Drip, Sprinkler) किंवा "cancel" टाइप करा.',
-    invalidIrrigation: 'कृपया यापैकी एक निवडा: Rainfed, Borewell, Canal, Drip, Sprinkler — किंवा "cancel" टाइप करा.',
+    farmSizeSet: 'शेताचा आकार ${num} एकरवर सेट केला.\n\nकृपया खालील यादीतून तुमची सिंचन पद्धत निवडा.\n\nकिंवा "cancel" टाइप करून रद्द करा.',
+    selectIrrigation: 'कृपया तुमची सिंचन पद्धत निवडा किंवा "cancel" टाइप करा.',
+    invalidIrrigation: 'कृपया यापैकी एक निवडा: पावसावर अवलंबित, बोअरवेल, कालवा, ठिबक, तुषार — किंवा "cancel" टाइप करा.',
+    irrigationSelectButton: 'पद्धत निवडा',
+    irrigationSectionTitle: 'सिंचन पद्धती',
     analysingCropPlan: 'तुमच्या पीक योजनेचे विश्लेषण केले जात आहे, कृपया थांबा.',
     cropPlanAnalysis: 'पीक योजना विश्लेषण\n\n${analysis}',
     cropPlanIncomplete: 'पीक योजना जतन झाली परंतु काही तपशील गहाळ आहेत. कृपया मुख्य मेनूमधून एक नवीन तयार करा.',
@@ -172,6 +217,32 @@ const messages: Record<SupportedLanguages, Record<string, string>> = {
     mandiAnalysing: '${product} साठी मंडी भाव मिळवले जात आहेत, कृपया थांबा...',
     mandiAnalysisResult: 'मंडी भाव विश्लेषण\n\n${analysis}',
   },
+};
+
+// ─── Irrigation options (multilingual) ───────────────────────────────────────
+
+const irrigationOptions: Record<SupportedLanguages, { id: string; title: string }[]> = {
+  [SupportedLanguages.ENGLISH]: [
+    { id: 'irrigation_rainfed',   title: 'Rainfed' },
+    { id: 'irrigation_borewell',  title: 'Borewell' },
+    { id: 'irrigation_canal',     title: 'Canal' },
+    { id: 'irrigation_drip',      title: 'Drip' },
+    { id: 'irrigation_sprinkler', title: 'Sprinkler' },
+  ],
+  [SupportedLanguages.HINDI]: [
+    { id: 'irrigation_rainfed',   title: 'वर्षाधारित (Rainfed)' },
+    { id: 'irrigation_borewell',  title: 'बोरवेल (Borewell)' },
+    { id: 'irrigation_canal',     title: 'नहर (Canal)' },
+    { id: 'irrigation_drip',      title: 'ड्रिप (Drip)' },
+    { id: 'irrigation_sprinkler', title: 'छिड़काव (Sprinkler)' },
+  ],
+  [SupportedLanguages.MARATHI]: [
+    { id: 'irrigation_rainfed',   title: 'पावसावर अवलंबित' },
+    { id: 'irrigation_borewell',  title: 'बोअरवेल' },
+    { id: 'irrigation_canal',     title: 'कालवा' },
+    { id: 'irrigation_drip',      title: 'ठिबक सिंचन' },
+    { id: 'irrigation_sprinkler', title: 'तुषार सिंचन' },
+  ],
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -301,6 +372,29 @@ async function sendMandiProductList(
 
 // ─── Express app ──────────────────────────────────────────────────────────────
 
+/**
+ * If the user has voice analysis enabled, convert `text` to speech via
+ * ElevenLabs and send the resulting audio as a WhatsApp audio message.
+ * Errors are caught and logged so they never block the text response.
+ */
+async function sendVoiceIfEnabled(
+  phone: string,
+  text: string,
+  lang: SupportedLanguages,
+  user: any
+): Promise<void> {
+  if (!user.voiceEnabled) return;
+  try {
+    console.log(`[Voice] Generating TTS for ${phone}, lang=${lang}`);
+    const audioBuffer = await textToSpeech(text, lang);
+    const mediaId = await uploadAudioToWhatsApp(audioBuffer, 'audio/mpeg');
+    await sendAudioMessage(phone, mediaId);
+    console.log(`[Voice] Audio message sent to ${phone}`);
+  } catch (err) {
+    console.error('[Voice] Failed to send voice message:', err);
+  }
+}
+
 const app = express();
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/shetkari';
@@ -418,10 +512,13 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
       if (msgType === 'location') {
         const { latitude, longitude } = value.messages[0].location;
         user.location = { latitude, longitude };
-        user.botState = BotState.IDLE;
+        user.botState = BotState.AWAITING_VOICE_PREFERENCE;
         await user.save();
-        await sendTextMessage(farmerPhoneNumber, locationSavedMessage[lang]);
-        await sendMainMenu(farmerPhoneNumber, lang);
+        await sendListMenu(
+          farmerPhoneNumber,
+          voicePreferenceOptions[lang],
+          voicePreferenceMessage[lang]
+        );
       } else {
         await sendTextMessage(farmerPhoneNumber, locationRequestMessage[lang]);
       }
@@ -429,9 +526,26 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
       return;
     }
 
+    // ── State: AWAITING_VOICE_PREFERENCE (onboarding) ────────────────────────
+    if (user.botState === BotState.AWAITING_VOICE_PREFERENCE) {
+      if (buttonId === 'voice_yes' || buttonId === 'voice_no') {
+        user.voiceEnabled = buttonId === 'voice_yes';
+        user.botState = BotState.IDLE;
+        await user.save();
+        const confirmMsg = user.voiceEnabled ? voiceEnabledMessage[lang] : voiceDisabledMessage[lang];
+        await sendTextMessage(farmerPhoneNumber, locationSavedMessage[lang]);
+        await sendTextMessage(farmerPhoneNumber, confirmMsg);
+        await sendMainMenu(farmerPhoneNumber, lang);
+      } else {
+        // Re-prompt if unexpected input
+        await sendListMenu(farmerPhoneNumber, voicePreferenceOptions[lang], voicePreferenceMessage[lang]);
+      }
+      res.sendStatus(200);
+      return;
+    }
+
     // ── State: AWAITING_UPDATE_CHOICE ─────────────────────────────────────────
-    if (user.botState === BotState.AWAITING_UPDATE_CHOICE) {
-      if (buttonId === 'update_language') {
+    if (user.botState === BotState.AWAITING_UPDATE_CHOICE) {      if (buttonId === 'update_language') {
         user.botState = BotState.AWAITING_NEW_LANGUAGE;
         await user.save();
         await sendListMenu(
@@ -447,6 +561,10 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
         user.botState = BotState.AWAITING_NEW_LOCATION;
         await user.save();
         await sendTextMessage(farmerPhoneNumber, locationRequestMessage[lang]);
+      } else if (buttonId === 'update_voice') {
+        user.botState = BotState.AWAITING_NEW_VOICE_PREFERENCE;
+        await user.save();
+        await sendListMenu(farmerPhoneNumber, voicePreferenceOptions[lang], voicePreferenceMessage[lang]);
       } else {
         await sendListMenu(farmerPhoneNumber, updateChoiceOptions[lang], updateChoiceMessage[lang]);
       }
@@ -494,6 +612,22 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
         await sendMainMenu(farmerPhoneNumber, lang);
       } else {
         await sendTextMessage(farmerPhoneNumber, locationRequestMessage[lang]);
+      }
+      res.sendStatus(200);
+      return;
+    }
+
+    // ── State: AWAITING_NEW_VOICE_PREFERENCE ──────────────────────────────────
+    if (user.botState === BotState.AWAITING_NEW_VOICE_PREFERENCE) {
+      if (buttonId === 'voice_yes' || buttonId === 'voice_no') {
+        user.voiceEnabled = buttonId === 'voice_yes';
+        user.botState = BotState.IDLE;
+        await user.save();
+        const confirmMsg = user.voiceEnabled ? voiceEnabledMessage[lang] : voiceDisabledMessage[lang];
+        await sendTextMessage(farmerPhoneNumber, confirmMsg);
+        await sendMainMenu(farmerPhoneNumber, lang);
+      } else {
+        await sendListMenu(farmerPhoneNumber, voicePreferenceOptions[lang], voicePreferenceMessage[lang]);
       }
       res.sendStatus(200);
       return;
@@ -607,15 +741,13 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
       await crop.save();
       user.botState = BotState.AWAITING_IRRIGATION_METHOD;
       await user.save();
-      // WhatsApp buttons: max 3 per message — send first 3, user can type others
-      await sendListMenu(
+      // Use interactive list to show all 5 irrigation options at once
+      await sendInteractiveList(
         farmerPhoneNumber,
-        [
-          { id: 'irrigation_rainfed', title: 'Rainfed' },
-          { id: 'irrigation_borewell', title: 'Borewell' },
-          { id: 'irrigation_canal', title: 'Canal' },
-        ],
-        messages[lang].farmSizeSet.replace('${num}', num.toString())
+        messages[lang].farmSizeSet.replace('${num}', num.toString()),
+        messages[lang].irrigationSelectButton,
+        messages[lang].irrigationSectionTitle,
+        irrigationOptions[lang]
       );
       res.sendStatus(200);
       return;
@@ -623,12 +755,17 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
 
     // ── State: AWAITING_IRRIGATION_METHOD ─────────────────────────────────────
     if (user.botState === BotState.AWAITING_IRRIGATION_METHOD) {
-      const rawInput: string | null = buttonId ?? textBody;
+      // list_reply comes from the interactive list; also accept plain text fallback
+      const rawInput: string | null = listReplyId ?? textBody;
 
       if (!rawInput) {
-        await sendTextMessage(
+        // Re-send the interactive list
+        await sendInteractiveList(
           farmerPhoneNumber,
-          messages[lang].selectIrrigation
+          messages[lang].selectIrrigation,
+          messages[lang].irrigationSelectButton,
+          messages[lang].irrigationSectionTitle,
+          irrigationOptions[lang]
         );
         res.sendStatus(200);
         return;
@@ -676,7 +813,9 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
       if (!isCropPlanIncomplete(crop as any)) {
         await sendTextMessage(farmerPhoneNumber, messages[lang].analysingCropPlan);
         const analysis = await cropPlanAnalysis(crop as any, user.id, lang);
-        await sendTextMessage(farmerPhoneNumber, messages[lang].cropPlanAnalysis.replace('${analysis}', analysis));
+        const cropPlanText = messages[lang].cropPlanAnalysis.replace('${analysis}', analysis);
+        await sendTextMessage(farmerPhoneNumber, cropPlanText);
+        await sendVoiceIfEnabled(farmerPhoneNumber, cropPlanText, lang, user);
       } else {
         await sendTextMessage(
           farmerPhoneNumber,
@@ -726,10 +865,9 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
         const location: GeoLocation =
           user.location ?? { latitude: 0, longitude: 0 };
         const analysis = await getMandiAnalysisForProduct(location, lang, productId);
-        await sendTextMessage(
-          farmerPhoneNumber,
-          messages[lang].mandiAnalysisResult.replace('${analysis}', analysis)
-        );
+        const mandiResultText = messages[lang].mandiAnalysisResult.replace('${analysis}', analysis);
+        await sendTextMessage(farmerPhoneNumber, mandiResultText);
+        await sendVoiceIfEnabled(farmerPhoneNumber, mandiResultText, lang, user);
         user.botState = BotState.IDLE;
         await user.save();
         await sendMainMenu(farmerPhoneNumber, lang);
