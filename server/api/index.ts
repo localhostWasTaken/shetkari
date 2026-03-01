@@ -6,6 +6,7 @@ import ApiResponse from './models/apiResponse';
 import { sendListMenu, sendTextMessage, sendLongTextMessage, sendInteractiveList, uploadAudioToWhatsApp, sendAudioMessage } from './utils/whatsapp';
 import UserModel, { BotState, SupportedLanguages } from './entities/users';
 import CropPlanModel, { isCropPlanIncomplete } from './entities/crop_plan';
+import ProcessedMessageModel from './entities/processed_messages';
 import { cropPlanAnalysis } from './utils/crop_plan_analysis';
 import { getMandiProductsForUser, getMandiAnalysisForProduct, GeoLocation } from './utils/mandi_analysis';
 import { textToSpeech } from './utils/elevenlabs';
@@ -436,6 +437,31 @@ app.post('/api/webhook/whatsapp', async (req: Request, res: Response) => {
     }
 
     console.log('Received WhatsApp webhook:', JSON.stringify(req.body, null, 2));
+
+    // ── Idempotency check ─────────────────────────────────────────────────────
+    const messageId: string = value.messages[0].id;
+    
+    // Check if we've already processed this message
+    const alreadyProcessed = await ProcessedMessageModel.findOne({ messageId });
+    if (alreadyProcessed) {
+      console.log(`[Idempotency] Message ${messageId} already processed at ${alreadyProcessed.processedAt}, skipping.`);
+      res.sendStatus(200);
+      return;
+    }
+
+    // Mark this message as processed (optimistic locking - do this early)
+    try {
+      await ProcessedMessageModel.create({ messageId, processedAt: new Date() });
+      console.log(`[Idempotency] Message ${messageId} marked as processed.`);
+    } catch (err: any) {
+      // If we get a duplicate key error, another process already handled this
+      if (err.code === 11000) {
+        console.log(`[Idempotency] Message ${messageId} was processed by another instance, skipping.`);
+        res.sendStatus(200);
+        return;
+      }
+      throw err; // Re-throw other errors
+    }
 
     const farmerPhoneNumber: string = value.messages[0].from;
     const msgType: string = value.messages[0].type;

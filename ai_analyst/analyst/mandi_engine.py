@@ -88,12 +88,33 @@ class MandiAnalysisRequest(BaseModel):
     expected_language: str = "English"
 
 
+class MandiAdvisoryReport(BaseModel):
+    advisory: str
+
+
 # ---------------------------------------------------------------------------
 # Gemini client (singleton)
 # ---------------------------------------------------------------------------
 
 _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
+SYSTEM_INSTRUCTION = """You are a knowledgeable mandi (agricultural market) price advisor for Indian farmers.
+
+Write a DETAILED, actionable advisory.
+Use WhatsApp-safe formatting: *bold* for section headers and key numbers, plain text otherwise.
+Use relevant emojis (one per section) to keep it visually engaging.
+
+STRUCTURE YOUR RESPONSE exactly like this:
+1. Commodity name and location header
+2. BEST MANDI — name, price, variety, grade, how much above average, distance
+3. TOP NEARBY MARKETS — table/list of top 3-5 with prices, varieties, distances
+4. PRICE OVERVIEW — average, high, low, spread, how many markets analyzed
+5. EXPERT RECOMMENDATIONS — from the data: which market to sell at, why, price trends
+6. ACTIONABLE TIPS — 2-3 specific actions the farmer should take right now
+
+Be factual — use ONLY the numbers from the data. Do NOT invent prices.
+Be detailed — include varieties, price ranges, distances, dates when available.
+Keep each section informative. Total response should be 200-350 words."""
 
 # ---------------------------------------------------------------------------
 # Prompt builder — feeds ALL the rich data to Gemini
@@ -177,23 +198,7 @@ def _build_mandi_prompt(req: MandiAnalysisRequest) -> str:
 
     location_str = ", ".join(filter(None, [req.district, req.state])) or "India"
 
-    return f"""You are a knowledgeable mandi (agricultural market) price advisor for Indian farmers.
-
-Write a DETAILED, actionable advisory in {req.expected_language} using the native script of that language.
-Use WhatsApp-safe formatting: *bold* for section headers and key numbers, plain text otherwise.
-Use relevant emojis (one per section) to keep it visually engaging.
-
-STRUCTURE YOUR RESPONSE exactly like this:
-1. Commodity name and location header
-2. BEST MANDI — name, price, variety, grade, how much above average, distance
-3. TOP NEARBY MARKETS — table/list of top 3-5 with prices, varieties, distances
-4. PRICE OVERVIEW — average, high, low, spread, how many markets analyzed
-5. EXPERT RECOMMENDATIONS — from the data: which market to sell at, why, price trends
-6. ACTIONABLE TIPS — 2-3 specific actions the farmer should take right now
-
-Be factual — use ONLY the numbers from the data below. Do NOT invent prices.
-Be detailed — include varieties, price ranges, distances, dates when available.
-Keep each section informative. Total response should be 200-350 words.
+    return f"""Language to use: {req.expected_language} (use native script)
 
 ═══════════════════════════════
 DATA (all from real market records)
@@ -217,8 +222,7 @@ Pricing method: {req.calculation_method or 'N/A'}
 ▸ RECOMMENDATIONS:
 {rec_block}
 
-═══════════════════════════════
-Now write the detailed advisory:"""
+═══════════════════════════════"""
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +234,7 @@ _MAX_RETRIES = 2
 def analyse_mandi(request: MandiAnalysisRequest) -> str:
     """
     Generate a detailed, multilingual mandi price advisory using Gemini.
-    Retries once on transient Gemini 500 errors.
+    Uses Structured Outputs (`response_json_schema`) to prevent truncation.
 
     Returns advisory text suitable for WhatsApp delivery.
     """
@@ -242,11 +246,18 @@ def analyse_mandi(request: MandiAnalysisRequest) -> str:
                 model=GEMINI_MODEL,
                 contents=prompt,
                 config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
                     temperature=0.4,
-                    max_output_tokens=800,
+                    # JSON schema ensures model finishes generating text completely
+                    response_mime_type="application/json",
+                    response_json_schema=MandiAdvisoryReport.model_json_schema(),
                 ),
             )
-            return response.text.strip()
+            # Log the length to terminal so we can debug if it truncates
+            report = MandiAdvisoryReport.model_validate_json(response.text)
+            text = report.advisory.strip()
+            print(f"DEBUG: Gemini generated {len(text)} characters for {request.expected_language}")
+            return text
         except Exception as e:
             if attempt < _MAX_RETRIES and "500" in str(e):
                 time.sleep(1)
